@@ -29,6 +29,40 @@ function Protect-MnaRouteDirectory {
     Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
 }
 
+function Get-MnaRouteNativeProcessImage {
+    param([Parameter(Mandatory)][uint32]$ProcessId)
+    if (-not ('MnaRoute.NativeProcessImage' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+namespace MnaRoute {
+    public static class NativeProcessImage {
+        [DllImport("kernel32.dll", SetLastError=true)]
+        private static extern IntPtr OpenProcess(uint access, bool inheritHandle, uint processId);
+        [DllImport("kernel32.dll", EntryPoint="QueryFullProcessImageNameW", CharSet=CharSet.Unicode, SetLastError=true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool Query(IntPtr handle, uint flags, StringBuilder path, ref uint size);
+        [DllImport("kernel32.dll")]
+        private static extern bool CloseHandle(IntPtr handle);
+        public static string Read(uint processId) {
+            IntPtr handle=OpenProcess(0x1000, false, processId);
+            if (handle==IntPtr.Zero) return null;
+            try {
+                uint size=32768;
+                StringBuilder path=new StringBuilder((int)size);
+                return Query(handle,0,path,ref size) ? path.ToString() : null;
+            } finally { CloseHandle(handle); }
+        }
+    }
+}
+'@ -ErrorAction Stop | Out-Null
+    }
+    $image=[MnaRoute.NativeProcessImage]::Read($ProcessId)
+    if ([string]::IsNullOrEmpty($image)) { throw '无法读取探测进程的实际映像路径' }
+    return $image
+}
+
 function New-MnaGameRouteSession {
     [CmdletBinding()]
     param(
@@ -53,7 +87,7 @@ function New-MnaGameRouteSession {
     if (Test-Path -LiteralPath $directory) { throw '本轮线路配置已存在，未覆盖' }
     $helperPath = [IO.Path]::GetFullPath($HelperExecutable)
     $tcpProbePath = (Get-Command curl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
-    $udpProbePath = (Get-Process -Id $PID -ErrorAction Stop).Path
+    $udpProbePath = Get-MnaRouteNativeProcessImage -ProcessId ([uint32]$PID)
     if (-not (Test-Path -LiteralPath $helperPath -PathType Leaf)) { throw '游戏引流程序缺失' }
     if ($tcpProbePath.Contains(',') -or $udpProbePath.Contains(',')) { throw '探测程序路径包含规则分隔符' }
     Assert-MnaRulePathParentheses -Path $tcpProbePath
@@ -121,6 +155,14 @@ function Test-MnaGameRouteProcess {
     $identity = $Session.ProcessIdentity
     $current = Get-CimInstance Win32_Process -Filter ('ProcessId=' + [int]$identity.Pid) -Property CreationDate,ExecutablePath -ErrorAction Stop
     $imagePath=if ($current) { $current.ExecutablePath } else { $null }
+    if ($current -and -not $imagePath) {
+        try {
+            $liveProcess=Get-Process -Id ([int]$identity.Pid) -ErrorAction Stop
+            $liveTicks=$liveProcess.StartTime.ToUniversalTime().Ticks
+            $cimTicks=$current.CreationDate.ToUniversalTime().Ticks
+            if (-not $liveProcess.HasExited -and ($liveTicks-($liveTicks % 10L)) -eq $cimTicks) { $imagePath=$liveProcess.Path }
+        } catch { }
+    }
     if ($current -and -not $imagePath -and ('MnaUi.LimitedProcessImageQuery' -as [type])) {
         $imagePath=[MnaUi.LimitedProcessImageQuery]::Read([uint32]$identity.Pid)
     }
@@ -332,17 +374,33 @@ function Start-MnaGameRoute {
     # Only paths are passed on the command line; credentials remain in the private YAML.
     $arguments = @('-d', ('"' + $Session.Directory + '"'), '-f', ('"' + $Session.ConfigPath + '"'))
     $process = Start-Process -FilePath $Session.HelperExecutable -ArgumentList $arguments -WorkingDirectory $Session.Directory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $Session.Directory 'helper.stdout.log') -RedirectStandardError (Join-Path $Session.Directory 'helper.stderr.log')
+    $null=$process.Handle
     $created = $process.StartTime
     $Session.ProcessIdentity = [pscustomobject]@{Pid=[int]$process.Id;Created=$created;Depth=2;ExecutablePath=$Session.HelperExecutable;RunId=$Session.RunId;Kind='GameRouteHelper'}
     $OwnedProcesses[[int]$process.Id] = $Session.ProcessIdentity
     $actual = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $process.Id) -Property CreationDate,ExecutablePath -ErrorAction Stop
-    if ($actual -and [string]::Equals($actual.ExecutablePath,$Session.HelperExecutable,[StringComparison]::OrdinalIgnoreCase) -and [math]::Abs(($actual.CreationDate-$created).TotalSeconds) -lt 1) {
-        $Session.ProcessIdentity.Created = $actual.CreationDate
+    $actualImage=if ($actual) { $actual.ExecutablePath } else { $null }
+    if ($actual -and -not $actualImage -and -not $process.HasExited) {
+        try { $actualImage=$process.Path } catch { }
+        if (-not $actualImage -and ('MnaUi.LimitedProcessImageQuery' -as [type])) { $actualImage=[MnaUi.LimitedProcessImageQuery]::Read([uint32]$process.Id) }
     }
+    $startTicks=$created.ToUniversalTime().Ticks
+    if ($actual -and -not $process.HasExited -and [string]::Equals($actualImage,$Session.HelperExecutable,[StringComparison]::OrdinalIgnoreCase) -and ($startTicks-($startTicks % 10L)) -eq $actual.CreationDate.ToUniversalTime().Ticks) {
+        $Session.ProcessIdentity.Created = $actual.CreationDate
+        $OwnedProcesses[[int]$process.Id] = $Session.ProcessIdentity
+    }
+    Write-MnaUiJson -Path (Join-Path $Session.Directory 'identity-start.json') -Value ([pscustomobject]@{Pid=$process.Id;StartTicks=$startTicks;RecordedTicks=$Session.ProcessIdentity.Created.ToUniversalTime().Ticks;CimTicks=if($actual){$actual.CreationDate.ToUniversalTime().Ticks}else{$null};CimPath=if($actual){$actual.ExecutablePath}else{$null};ResolvedPath=$actualImage;ExpectedPath=$Session.HelperExecutable;HasExited=$process.HasExited;ExitCode=if($process.HasExited){$process.ExitCode}else{$null}})
     Save-MnaGameRouteRecovery -Session $Session
     $clock = [Diagnostics.Stopwatch]::StartNew()
     do {
-        if (-not (Test-MnaGameRouteProcess $Session)) { throw '游戏引流程序在控制接口就绪前退出' }
+        if (-not (Test-MnaGameRouteProcess $Session)) {
+            $process.Refresh()
+            $observed=Get-CimInstance Win32_Process -Filter ('ProcessId='+$process.Id) -Property CreationDate,ExecutablePath -ErrorAction SilentlyContinue
+            $observedPath=$null;try{$observedPath=$process.Path}catch{}
+            Write-MnaUiJson -Path (Join-Path $Session.Directory 'identity-failure.json') -Value ([pscustomobject]@{Pid=$process.Id;HasExited=$process.HasExited;ExitCode=if($process.HasExited){$process.ExitCode}else{$null};ExpectedTicks=$Session.ProcessIdentity.Created.ToUniversalTime().Ticks;CimTicks=if($observed){$observed.CreationDate.ToUniversalTime().Ticks}else{$null};CimPath=if($observed){$observed.ExecutablePath}else{$null};ProcessPath=$observedPath;ExpectedPath=$Session.HelperExecutable})
+            if ($process.HasExited) { throw ('游戏引流程序退出，退出码：'+$process.ExitCode) }
+            throw '游戏引流程序仍存活，但创建时间或映像路径身份核验不匹配'
+        }
         if (Test-MnaGameRouteController $Session) {
             $status = Get-MnaGameRouteStatus $Session
             if ($status.TunEnabled) {

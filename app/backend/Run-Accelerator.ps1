@@ -4,8 +4,9 @@ param([Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{24}$')][string]$RunId)
 $ErrorActionPreference='Stop'
 $RoutingMode='ResolveOnly'
 . (Join-Path $PSScriptRoot 'Mna-UI.Common.ps1')
-. (Join-Path $PSScriptRoot 'Trial-NetworkState.ps1')
-. (Join-Path $PSScriptRoot 'Mna-GameRoute.ps1')
+$uiPaths=Get-MnaUiPaths
+. (Join-Path $uiPaths.Root 'Trial-NetworkState.ps1')
+. (Join-Path $uiPaths.Root 'Mna-GameRoute.ps1')
 . Initialize-MnaUiRuntimeVariables
 $uiPaths=Get-MnaUiPaths
 $uiBefore=$null

@@ -18,6 +18,13 @@ try {
     catch [IO.IOException] { Get-MnaUiStatus | ConvertTo-Json -Depth 5; exit }
     $record=Read-MnaUiJson $uiPaths.WorkerRecord
     if ($Action -eq 'Start' -and (Test-MnaFreeTrialExpired)) { throw '本次免费试用已到期，请先核对腾讯云服务状态' }
+    $owner=if($record -and $record.RunId -match '^[a-f0-9]{24}$'){Read-MnaUiJson (Get-MnaRunFile $record.RunId ownership)}else{$null}
+    $previousStatus=Read-MnaUiJson $uiPaths.Status
+    $disposition=Get-MnaUiSessionDisposition -Record $record -Owner $owner -Status $previousStatus
+    if($disposition.Kind -eq 'foreign'){throw $disposition.Reason}
+    if(Complete-MnaUiPreviousBootSession -Record $record -Owner $owner -Status $previousStatus) {
+        $record=Read-MnaUiJson $uiPaths.WorkerRecord
+    }
     $workerAlive=Test-MnaUiWorker $record
     if ($workerAlive) {
         if ($Action -eq 'Stop') {
@@ -31,7 +38,7 @@ try {
         $selectedMode='ResolveOnly'
         $uiRunId=New-MnaHexSecret 12
         $shellPath=$uiPaths.PowerShell
-        $record=[pscustomobject]@{RunId=$uiRunId;WorkerPid=0;WorkerCreatedUtc=$null;WorkerExecutable=$shellPath;WorkerScript=$uiPaths.WorkerScript;RoutingMode=$selectedMode}
+        $record=[pscustomobject]@{RunId=$uiRunId;WorkerPid=0;WorkerCreatedUtc=$null;WorkerExecutable=$shellPath;WorkerScript=$uiPaths.WorkerScript;RoutingMode=$selectedMode;BootIdentity=Get-MnaUiBootIdentity}
         Write-MnaUiJson -Path $uiPaths.WorkerRecord -Value $record
         Write-MnaUiStatus -Phase starting -Message '正在准备本地服务…' -RunId $uiRunId -RoutingMode $selectedMode -ProgressStage '准备本地服务' -OperationStartedAt $uiOperationStartedAt
         $workerArguments=@('-NoProfile','-NonInteractive','-File',('"'+$uiPaths.WorkerScript+'"'),'-RunId',$uiRunId)
@@ -45,8 +52,8 @@ try {
         $remaining=0
         if ($record -and $record.RunId -match '^[a-f0-9]{24}$') {
             $owner=Read-MnaUiJson (Get-MnaRunFile $record.RunId ownership)
-            if ($owner -and ($owner.RunId -ne $record.RunId -or -not [string]::Equals($owner.Runtime,$trialRuntimeDirectory,[StringComparison]::OrdinalIgnoreCase))) { throw '上次归属记录无法确认，未操作任何无归属的进程' }
-            if ($owner -and $owner.RunId -eq $record.RunId -and [string]::Equals($owner.Runtime,$trialRuntimeDirectory,[StringComparison]::OrdinalIgnoreCase)) {
+            if ($owner -and ($owner.RunId -ne $record.RunId -or -not (Test-MnaUiSamePath $owner.Runtime $trialRuntimeDirectory))) { throw '上次归属记录无法确认，未操作任何无归属的进程' }
+            if ($owner -and -not $owner.RetiredPreviousBoot -and $owner.RunId -eq $record.RunId -and (Test-MnaUiSamePath $owner.Runtime $trialRuntimeDirectory)) {
                 $trialProcess=[pscustomobject]@{Id=[int]$owner.RootPid}
                 $trialStartTime=[datetime]$owner.RootCreated
                 foreach ($item in @($owner.Owned)) {
@@ -55,7 +62,7 @@ try {
                 try { Write-MnaUiStatus -Phase stopping -Message '正在核对上次连接并清理本次拥有的进程' -RunId $record.RunId -AllowTerminalTransition -ProgressStage '清理上次连接' -OperationStartedAt $uiOperationStartedAt } catch { }
                 $gameRouteCleanup=$null
                 try {
-                    . (Join-Path $PSScriptRoot 'Mna-GameRoute.ps1')
+                    . (Join-Path $uiPaths.Root 'Mna-GameRoute.ps1')
                     $gameRouteCleanup=Stop-MnaGameRouteRecovery -RunId $record.RunId -OwnedProcesses $trialOwned
                 } catch { $gameRouteCleanup=[pscustomobject]@{ProcessStopped=$false;Errors=@((Protect-MnaTrialMessage $_.Exception.Message))} }
                 $cleanup=Stop-MnaUiOwnedRuntime
@@ -63,7 +70,7 @@ try {
                     try { $gameRouteCleanup=Stop-MnaGameRouteRecovery -RunId $record.RunId -OwnedProcesses $trialOwned } catch { }
                 }
                 $remaining=$cleanup.RemainingOwnedProcessCount
-                . (Join-Path $PSScriptRoot 'Trial-NetworkState.ps1')
+                . (Join-Path $uiPaths.Root 'Trial-NetworkState.ps1')
                 $after=Get-TrialNetworkState
                 $null=Save-TrialNetworkState -State $after -Label ui_recovery_after
                 $null=Save-TrialNetworkState -State $cleanup -Label ui_recovery_cleanup

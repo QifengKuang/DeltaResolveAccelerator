@@ -33,6 +33,17 @@ $trialSensitiveStrings=@()
 # Only fixture liveness is inspected; synthetic identities never reach process APIs.
 $script:fixtureWorkerAlive=$true
 function Test-MnaUiWorker { param($Record) return $script:fixtureWorkerAlive }
+# This suite isolates atomic writes and progress serialization. Session identity
+# and recovery use the real classifier in Test-SessionState.ps1 instead.
+function Get-MnaUiBootIdentity { '2000-01-01T00:00:00.0000000Z' }
+function Get-MnaUiSessionDisposition {
+    param($Record,$Owner,$Status)
+    [pscustomobject]@{
+        Kind=if(-not $Record){'empty'}elseif($script:fixtureWorkerAlive){'live'}else{'recoveryRequired'}
+        Ready=($script:fixtureWorkerAlive -and $Status.phase -eq 'connected' -and $Status.ready -eq $true -and $Status.gameRoutingConfigured -eq $true -and $Status.udpRoutingVerified -eq $true)
+        Reason=if($script:fixtureWorkerAlive){$Status.message}else{'Fixture worker exited'}
+    }
+}
 
 function Assert-Atomic([bool]$Condition,[string]$Message) {
     if (-not $Condition) { throw ('离线断言失败：'+$Message) }

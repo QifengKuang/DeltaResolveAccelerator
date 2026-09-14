@@ -44,11 +44,21 @@ if ($uiReports.Count -ne 1) { throw 'UI test report was not produced.' }
 $ui=Get-Content -LiteralPath $uiReports[0].FullName -Raw | ConvertFrom-Json
 if (-not $ui.passed -or $ui.networkStarted -or $ui.realAppSettingsRead) { throw 'Unexpected UI test result.' }
 $uiChecks=@($ui.PSObject.Properties | Where-Object { $_.Name -notin @('passed','networkStarted','realAppSettingsRead','testDirectory') }).Count
+$sessionOutput=& $pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Test-SessionState.ps1')
+if($LASTEXITCODE -ne 0){throw 'Session-state regression failed.'}
+$session=$sessionOutput|Out-String|ConvertFrom-Json
+if($session.Failed -ne 0 -or $session.Passed -ne $session.Total){throw 'Unexpected session-state test result.'}
+$controlOutput=& $pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Test-ControlSessionOffline.ps1')
+if($LASTEXITCODE -ne 0){throw 'Control-session regression failed.'}
+$control=$controlOutput|Out-String|ConvertFrom-Json
+if(-not $control.Passed -or $control.NetworkStarted -or $control.SdkStarted){throw 'Unexpected controller test result.'}
 $summary=[pscustomobject]@{
     Passed=$true
     BackendChecks=$backend.Checks
     AtomicStateChecks=$atomic.CheckCount
     UiChecks=$uiChecks
+    SessionStateChecks=$session.Total
+    ControlSessionChecks=$control.Checks
     NetworkStarted=$false
     RealAppSettingsRead=$false
     OfficialHelperParserChecked=$false
