@@ -70,9 +70,10 @@ try {
                 $null=Save-TrialNetworkState -State $gameRouteCleanup -Label ui_recovery_game_route
                 $baselineValid=$owner.BeforePath -and [IO.Path]::GetFullPath($owner.BeforePath).StartsWith((Join-Path $uiPaths.Root 'results')+'\',[StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $owner.BeforePath -PathType Leaf)
                 if ($baselineValid) {
-                    $comparison=Compare-TrialNetworkState -BaselinePath $owner.BeforePath -CurrentState $after
+                    $before=Get-Content -LiteralPath $owner.BeforePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                    $comparison=Compare-TrialNetworkState -BaselineState $before -CurrentState $after
                     $null=Save-TrialNetworkState -State $comparison -Label ui_recovery_comparison
-                    if (-not (Test-MnaUiConfigurationRestored $comparison)) { throw '已停止本次进程；网络配置仍有差异或未完整读取，请查看本地记录' }
+                    if (-not (Test-MnaUiConfigurationRestored $comparison -BaselineState $before -CurrentState $after)) { throw '已停止本次进程；网络配置仍有差异或未完整读取，请查看本地记录' }
                 }
                 if (-not $after.Complete -or $null -eq $remaining -or $remaining -gt 0 -or $cleanup.Errors.Count) {
                     throw '清理尚未完全确认；请查看本地检查记录'
