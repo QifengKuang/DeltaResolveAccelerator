@@ -1,0 +1,18 @@
+[CmdletBinding()]
+param([switch]$PreviewBuild)
+$ErrorActionPreference = 'Stop'
+$root = Split-Path $PSScriptRoot -Parent
+$compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+if (-not (Test-Path -LiteralPath $compiler)) { throw '.NET Framework C# compiler missing' }
+& (Join-Path $PSScriptRoot 'New-AppAssets.ps1') | Out-Null
+$out = if ($PreviewBuild) { Join-Path $root 'build/AcceleratorPreview.exe' } else { Join-Path $root 'app/Accelerator.exe' }
+$argsList = @('/nologo','/target:winexe','/platform:x64','/optimize+','/codepage:65001',('/out:'+$out),('/win32icon:'+(Join-Path $root 'src/app.ico')),
+    '/reference:System.dll','/reference:System.Core.dll','/reference:System.Drawing.dll','/reference:System.Windows.Forms.dll',
+    '/reference:System.Web.Extensions.dll','/reference:System.Security.dll')
+if (-not $PreviewBuild) { $argsList += '/win32manifest:'+(Join-Path $root 'src/app.manifest') }
+$argsList += Join-Path $root 'src/AcceleratorApp.cs'
+$argsList += Join-Path $root 'src/AssemblyInfo.cs'
+& $compiler @argsList
+if ($LASTEXITCODE -ne 0) { throw 'App compilation failed' }
+Copy-Item -LiteralPath (Join-Path $root 'src/Accelerator.exe.config') -Destination ($out+'.config') -Force
+Get-Item -LiteralPath $out | Select-Object Name,Length

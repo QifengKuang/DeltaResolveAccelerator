@@ -1,0 +1,53 @@
+# Local identity, settings, logs and network recovery state
+**/private/
+**/results/
+**/log/
+**/logs/
+**/credentials/
+**/deployment_private/
+**/user-settings.json
+**/mp_client_uuid.conf
+**/mp_client.json
+**/speed_mode_rules.json
+*.dpapi
+*.bin
+*.log
+*.mlog
+*.etl
+*.tmp
+*.pem
+*.pfx
+*.key
+.env
+.env.*
+
+# Obtain vendor components separately; do not commit any extracted SDK files.
+/app/runtime/
+/app/backend/vendor_inspection/
+/build/dependencies/
+/build/dependency-work/
+/build/tools/
+/dist/
+*.zip
+*.7z
+*.exe
+*.dll
+*.pdb
+/app/Accelerator.exe.config
+/build/AcceleratorPreview.exe.config
+/src/app.ico
+
+# Tests generate local paths and synthetic DPAPI fixtures.
+/tests/offline-work/
+/tests/atomic-runtime-work/
+/tests/ui-work/
+/tests/output/
+/tests/*.json
+/tests/*.png
+
+# Editor state
+.vs/
+.vscode/
+__pycache__/
+Thumbs.db
+Desktop.ini
