@@ -46,7 +46,7 @@ try {
     $uiBeforePath=Save-TrialNetworkState -State $uiBefore -Label ui_before
     $uiRecord.BeforePath=$uiBeforePath
     if (-not $uiBefore.Complete) { throw '无法完整读取网络基线，未启动连接' }
-    if (Get-Process -Name linkboost,linkboost-core,multipath-helper,mp-speeder -ErrorAction SilentlyContinue) { throw '已有 SDK 进程运行，本次未接管；请先结束现有测试' }
+    if (Get-MnaUiRuntimeProcesses) { throw '已有 SDK 进程运行，本次未接管；请先结束现有测试' }
     if (@(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object {$_.LocalPort -in @(9801,12345,9803)}).Count -or
         @(Get-NetUDPEndpoint -ErrorAction Stop | Where-Object {$_.LocalPort -in @(9801,12345,9803)}).Count) { throw '本地测试端口已被占用，本次未启动' }
     if (-not (Test-Path -LiteralPath $trialExecutable -PathType Leaf)) { throw '官方 SDK 文件缺失' }

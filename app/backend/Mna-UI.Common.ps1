@@ -497,7 +497,7 @@ function Assert-MnaUiPreviousRunClear {
             }
         }
     }
-    if (Get-Process -Name linkboost,linkboost-core,multipath-helper,mp-speeder -ErrorAction SilentlyContinue) {
+    if (Get-MnaUiRuntimeProcesses) {
         throw '已有 SDK 进程运行，未覆盖上次恢复记录；请先结束已有连接'
     }
 }

@@ -90,6 +90,7 @@ function Reset-Fixture {
     }
     $script:Worker=$null
     $script:SdkProcesses=@()
+    $script:FailInventory=$false
     $script:Adapters=@()
     $script:TcpListeners=@()
     $script:UdpEndpoints=@()
@@ -124,13 +125,17 @@ function Get-Process {
         if($script:Worker -and $Id -contains $script:Worker.Id){return $script:Worker}
         throw 'Fixture process is absent.'
     }
-    if($PSBoundParameters.ContainsKey('Name')) { return $script:SdkProcesses }
+    if($PSBoundParameters.ContainsKey('Name')) { return @() }
     throw 'Unbounded process enumeration is forbidden in this regression harness.'
 }
 function Get-CimInstance {
     [CmdletBinding()]
     param([string]$ClassName,[string]$Filter,[string[]]$Property)
     if($ClassName -eq 'Win32_OperatingSystem'){return [pscustomobject]@{LastBootUpTime=$script:BootTime}}
+    if($ClassName -eq 'Win32_Process' -and $Filter -eq "Name='linkboost.exe' OR Name='linkboost-core.exe' OR Name='multipath-helper.exe' OR Name='mp-speeder.exe'"){
+        if($script:FailInventory){throw 'Synthetic inventory unavailable'}
+        return $script:SdkProcesses
+    }
     if($ClassName -eq 'Win32_Process' -and $Filter -match '^ProcessId=(\d+)$'){
         $script:ProcessQueries.Add('CIM '+$Filter)
         return $script:CimProcesses[[int]$Matches[1]]
@@ -483,6 +488,12 @@ Invoke-Case 'retirement blocks if any SDK or helper remains' {
     $script:SdkProcesses=@([pscustomobject]@{Id=6000;Name='multipath-helper'})
     Assert-Throws { Complete-MnaUiPreviousBootSession -Record $script:Record -Owner $script:Owner -Status $script:Status } 'An existing helper must block retirement'
     Assert-Equal $script:Writes.Count 0 'Blocked retirement must preserve all existing records'
+}
+Invoke-Case 'unavailable process inventory blocks retirement without writes' {
+    Set-PreviousBootFixture
+    $script:FailInventory=$true
+    Assert-Throws { Complete-MnaUiPreviousBootSession -Record $script:Record -Owner $script:Owner -Status $script:Status } 'An unavailable inventory is not evidence of an empty process list'
+    Assert-Equal $script:Writes.Count 0 'Inventory failures must preserve the existing session'
 }
 foreach($adapter in @('mna_game_abcd12','mp_tun0')) {
     Invoke-Case ('retirement blocks remaining adapter '+$adapter) {

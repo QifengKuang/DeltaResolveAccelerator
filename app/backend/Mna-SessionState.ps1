@@ -1,5 +1,12 @@
 # Session identity is shared by Status, Start and Stop. Previous-boot records
 # are evidence to archive, never authority to terminate a possibly reused PID.
+function Get-MnaUiRuntimeProcesses {
+    # Get-Process -Name can omit elevated processes in a packaged caller even
+    # when the same PID is visible individually. Use the OS process inventory;
+    # inability to read it must block recovery rather than mean "no processes".
+    Get-CimInstance Win32_Process -Filter "Name='linkboost.exe' OR Name='linkboost-core.exe' OR Name='multipath-helper.exe' OR Name='mp-speeder.exe'" -Property Name,ProcessId -ErrorAction Stop
+}
+
 function Get-MnaUiBootIdentity {
     if (-not $script:MnaUiBootIdentity) {
         $boot=(Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime -ErrorAction Stop).LastBootUpTime
@@ -105,7 +112,7 @@ function Complete-MnaUiPreviousBootSession {
     if($disposition.Kind -ne 'previousBoot'){return $false}
     # Called under ui-control.lock. These are independent observations; no old
     # PID, interface index or saved baseline is used to change the machine.
-    if(Get-Process -Name linkboost,linkboost-core,multipath-helper,mp-speeder -ErrorAction SilentlyContinue){throw '重启后的恢复检查发现 SDK 进程，未接管其他连接'}
+    if(Get-MnaUiRuntimeProcesses){throw '重启后的恢复检查发现 SDK 进程，未接管其他连接'}
     if(@(Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object {$_.Name -like 'mna_game_*' -or $_.Name -eq 'mp_tun0'}).Count){throw '重启后仍有加速虚拟网卡，已保留记录等待核对'}
     if(@(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object {$_.LocalPort -in @(9801,12345,9803)}).Count -or
        @(Get-NetUDPEndpoint -ErrorAction Stop | Where-Object {$_.LocalPort -in @(9801,12345,9803)}).Count){throw '加速控制端口仍被占用，已保留记录等待核对'}

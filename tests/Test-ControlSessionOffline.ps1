@@ -18,11 +18,16 @@ $script:FixtureBoot='2026-01-02T00:00:00.0000000Z'
 function Get-MnaUiBootIdentity { $script:FixtureBoot }
 function Test-MnaUiWorker { param($Record) $Record.WorkerPid -eq 4242 }
 function Test-MnaUiSamePath { param($Left,$Right) [string]::Equals($Left,$Right,[StringComparison]::OrdinalIgnoreCase) }
-function Get-Process { param($Name) if($env:MNA_FIXTURE_RESIDUAL -eq 'process'){[pscustomobject]@{Id=9876}} }
+function Get-Process { param($Name) @() }
 function Get-NetAdapter { param([switch]$IncludeHidden) if($env:MNA_FIXTURE_RESIDUAL -eq 'tun'){[pscustomobject]@{Name='mna_game_fixture'}} }
 function Get-NetTCPConnection { param($State) if($env:MNA_FIXTURE_RESIDUAL -eq 'port'){[pscustomobject]@{LocalPort=9801}} }
 function Get-NetUDPEndpoint { @() }
-function Get-CimInstance { throw 'Unexpected process query in previous-boot recovery' }
+function Get-CimInstance {
+    param($ClassName,$Filter,$Property)
+    if($ClassName -eq 'Win32_Process' -and $Filter -eq "Name='linkboost.exe' OR Name='linkboost-core.exe' OR Name='multipath-helper.exe' OR Name='mp-speeder.exe'"){
+        if($env:MNA_FIXTURE_RESIDUAL -eq 'process'){[pscustomobject]@{ProcessId=9876;Name='linkboost.exe'}}
+    }else{throw 'Unexpected process query in previous-boot recovery'}
+}
 function Stop-Process { throw 'Offline controller must not stop any process' }
 function Invoke-WebRequest { throw 'Offline controller must not access the network' }
 function Assert-MnaReleaseConfiguration { [pscustomobject]@{RoutingMode='ResolveOnly'} }
