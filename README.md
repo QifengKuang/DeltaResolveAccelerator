@@ -1,8 +1,22 @@
 # 三角洲 · 主入口优化
 
-Windows x64 客户端源码，当前版本 **1.0.6**。使用腾讯云聚通 MNA 香港线路处理指定入口解析请求，对局流量保持本机直连。
+Windows x64 轻量客户端，当前版本 **1.1.0**。使用腾讯云聚通 MNA 香港线路处理指定入口解析请求，对局流量保持本机直连。
 
-支持同时保存 Steam 与 WeGame 两个完整游戏程序路径。设置中每行填写一个 `DeltaForceClient-Win64-Shipping.exe` 的绝对路径，保存后根据实际运行进程匹配规则，切换启动平台不需要重新选择路径。只安装一个版本时也可以只填一个路径；启动时会检查所有已保存路径是否存在。
+设置中分开管理 Steam 与 WeGame 路径，支持自动查找、选择程序或安装文件夹、替换和移除，并显示路径是否有效。保存后根据实际运行进程匹配规则，切换平台不需要重新配置。已有单路径和双路径配置会保留；查找失败不会清空原设置。
+
+## 安装与自动更新
+
+桌面与开始菜单始终指向安装目录中的 `DeltaLauncher.exe`。图标使用独立的 `DeltaResolve.ico`，不再依赖更新中被替换的主程序文件。设置 → 软件可以检查更新、关闭自动检查，以及修复快捷方式。
+
+已装好运行环境的电脑可使用轻量安装器：
+
+- [下载 1.1.0 安装／修复程序](https://raw.githubusercontent.com/QifengKuang/DeltaResolveAccelerator/updates/installers/DeltaResolveSetup-1.1.0.exe)
+- 安装器只携带本项目自己的界面、启动器和图标；复用既有 PowerShell 与 SDK，不重复下载大型运行环境。
+- 首次从源码安装仍需要准备下文中的官方运行依赖和独立设备密钥。安装、目录选择、干净依赖导入见 [安装说明](docs/INSTALLATION.md)。
+
+自动检查默认开启。客户端启动及运行期间定期检查官方签名更新源，成功检查间隔为六小时；也可以手动立即检查。新版本在后台下载，在下次启动且加速服务停止时自动安装。断网或下载失败时继续使用现有版本；替换失败或中途中断时尝试恢复原文件。日常更新仅包含主程序和配置文件，保留游戏路径、设备密钥、后台修复及运行环境。
+
+更新使用固定公钥验证 RSA-SHA256 签名、清单和文件哈希。发布到 GitHub 的 `updates` 分支后，两台已安装 1.1.0 启动器的电脑使用相同更新通道，之后无需逐台手工复制文件。签名只能证明更新来源和完整性，不是 Windows Authenticode 签名。
 
 此仓库包含自有界面、后端脚本和离线测试。官方 SDK、PowerShell 运行时、安装包、设备密钥、个人设置、网络状态和日志均不随仓库发布。
 
@@ -18,6 +32,8 @@ cd DeltaResolveAccelerator
 
 # 编译需要管理员权限运行的正式客户端；编译过程本身无需提权。
 ./build/Compile-App.ps1
+./build/Compile-Launcher.ps1
+./build/Compile-Setup.ps1
 
 # 编译不提权的测试程序并执行全部离线回归。
 ./tests/Test-Offline.ps1
@@ -46,10 +62,10 @@ Start-Process -FilePath ./build/AcceleratorPreview.exe -ArgumentList @('--previe
 文字、控件尺寸与自绘图形统一按系统 DPI 缩放。预览程序使用与正式客户端相同的 DPI manifest，但无需管理员权限。可用 `--preview-scale 1.5` 模拟 150% 布局；预览同时生成 `.layout.json`，记录文字尺寸与控件边界检查。
 
 ```powershell
-# 100%、125%、150%、200% × 8 种状态，共 32 组离线布局检查。
+# 100%、125%、150%、200% × 9 种状态，共 36 组离线布局检查。
 ./tests/Test-UiLayout.ps1
 
-# 80 组大小/状态/DPI 检查：每组反复缩放、字体有效性、边缘命中与尺寸限制。
+# 100 组大小/状态/DPI 检查：每组反复缩放、字体有效性、边缘命中与尺寸限制。
 # 同时通过后台原生 PrintWindow 绘制检查标题栏及按钮边角。
 ./tests/Test-UiResize.ps1
 ```
@@ -114,7 +130,19 @@ app/
 
 当前源码保留既有共享试用限制：**2026-11-13 00:00:00 +11:00 截止**，界面和后端均执行此限制。本次开源没有延长或移除此限制；克隆、编译或修改个人设置不会获得新的云授权。
 
-当前公开的是 1.0.6 源码，尚未在此仓库发布重新打包的安装程序。旧安装器和私人现场修复脚本没有纳入仓库。
+轻量安装器与签名更新包只包含自有文件，不含 SDK、PowerShell 运行时、密钥、用户设置或运行日志。旧现场修复脚本继续保留在本地。
+
+## 发布新版
+
+修改版本号并提交源码后，在包含最新 `main` 的干净工作树执行一次发布命令：
+
+```powershell
+./build/Publish-Release.ps1 -Version '1.1.1' -PrivateKeyPath 'C:\MyPrivateKeys\update-signing-key.dpapi'
+```
+
+命令编译并检查客户端，生成小型签名更新包，先推送源码，再原子更新 GitHub 上的签名发布目录。远端下载并在安全的下一次启动时应用更新；普通未发布的源码提交不会把未完成版本送到用户电脑。需要 Git 推送权限和对应公钥的本机签名密钥；密钥使用 Windows CurrentUser DPAPI 保存于仓库之外，不能提交。`-PrepareOnly` 可生成同样的本地发布树供已授权连接器推送。
+
+协议和回归验证覆盖篡改签名／哈希、旧版本、危险归档路径、连接期间禁止替换、更新中断恢复、快捷方式固定路径及个人文件保留。Shell Link 跟踪标志依据 [Microsoft 官方文档](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/ne-shlobj_core-shell_link_data_flags)。
 
 ## 排查与协作
 

@@ -26,7 +26,7 @@ $runName = 'run-{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGu
 $runDirectory = Join-Path $outputDirectory $runName
 $null = New-Item -ItemType Directory -Path $runDirectory -Force
 $summaryPath = Join-Path $outputDirectory 'resize-summary.json'
-$states = @('stopped', 'starting', 'error', 'settings')
+$states = @('stopped', 'starting', 'error', 'settings', 'software')
 $displayScales = @(1.0, 1.25, 1.5, 2.0)
 $sizes = @('default', 'minimum', 'wide', 'tall', 'maximum')
 $expectedResizeChecks = 23
@@ -129,10 +129,10 @@ foreach ($displayScale in $displayScales) {
                 if ($layout.networkStarted -ne $false) {
                     $issues.Add('Preview report did not confirm that networking remained stopped.')
                 }
-                if ($layout.settings -ne ($state -eq 'settings')) {
+                if ($layout.settings -ne ($state -in @('settings', 'software'))) {
                     $issues.Add('Preview did not show the requested dashboard or settings view.')
                 }
-                $expectedPhase = if ($state -eq 'settings') { 'stopped' } else { $state }
+                $expectedPhase = if ($state -in @('settings', 'software')) { 'stopped' } else { $state }
                 if ($layout.state -ne $expectedPhase) {
                     $issues.Add('Preview did not show the requested connection phase.')
                 }

@@ -26,7 +26,7 @@ $runName = 'run-{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGu
 $runDirectory = Join-Path $outputDirectory $runName
 $null = New-Item -ItemType Directory -Path $runDirectory -Force
 $summaryPath = Join-Path $outputDirectory 'layout-summary.json'
-$states = @('stopped', 'starting', 'connected', 'error', 'settings', 'setup', 'checking', 'stopping')
+$states = @('stopped', 'starting', 'connected', 'error', 'settings', 'setup', 'software', 'checking', 'stopping')
 $scales = @(1.0, 1.25, 1.5, 2.0)
 $cases = [Collections.Generic.List[object]]::new()
 $suiteStartedAt = [DateTimeOffset]::UtcNow
@@ -79,11 +79,11 @@ foreach ($scale in $scales) {
             if ($layout.networkStarted -ne $false) {
                 $issues.Add('Preview report did not confirm that networking remained stopped.')
             }
-            $expectedSettings = $state -in @('settings', 'setup')
+            $expectedSettings = $state -in @('settings', 'setup', 'software')
             if ($layout.settings -ne $expectedSettings) {
                 $issues.Add('Preview did not show the requested dashboard or settings view.')
             }
-            $expectedPhase = if ($state -in @('settings', 'setup', 'checking')) { 'stopped' } else { $state }
+            $expectedPhase = if ($state -in @('settings', 'setup', 'software', 'checking')) { 'stopped' } else { $state }
             if ($layout.state -ne $expectedPhase) {
                 $issues.Add('Preview did not show the requested connection phase.')
             }

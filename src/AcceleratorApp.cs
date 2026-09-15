@@ -444,6 +444,32 @@ namespace DeltaResolveAccelerator
         }
     }
 
+    internal sealed class MintToggle : CheckBox
+    {
+        internal MintToggle()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                ControlStyles.ResizeRedraw | ControlStyles.Opaque, true);
+            Cursor = Cursors.Hand;
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Palette.PaintBackdrop(this, e.Graphics);
+            float scale = Palette.Scale(this);
+            float width = 40 * scale, height = 22 * scale;
+            RectangleF track = new RectangleF(Width - width - 2, (Height - height) / 2, width, height);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (GraphicsPath shape = Palette.Rounded(track, height / 2))
+            using (Brush fill = new SolidBrush(Checked ? Palette.Teal : Palette.Border)) e.Graphics.FillPath(fill, shape);
+            float inset = 3 * scale, diameter = height - inset * 2;
+            using (Brush knob = new SolidBrush(Color.White)) e.Graphics.FillEllipse(knob,
+                Checked ? track.Right - diameter - inset : track.Left + inset, track.Top + inset, diameter, diameter);
+            TextRenderer.DrawText(e.Graphics, Text, Font, new Rectangle(0, 0, Math.Max(1, (int)track.Left - 12), Height),
+                ForeColor, TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, ClientRectangle, ForeColor, BackColor);
+        }
+    }
+
     internal sealed class MainForm : Form
     {
         internal float UiScale = 1f;
@@ -471,6 +497,7 @@ namespace DeltaResolveAccelerator
         private readonly SemaphoreSlim operationGate = new SemaphoreSlim(1, 1);
         private readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
         private readonly System.Windows.Forms.Timer animationTimer = new System.Windows.Forms.Timer();
+        private readonly System.Windows.Forms.Timer updateTimer = new System.Windows.Forms.Timer();
         private readonly Stopwatch animationClock = Stopwatch.StartNew();
         private readonly ConnectionWaitState connectionWait = new ConnectionWaitState();
         private readonly Panel shell = new Panel();
@@ -491,12 +518,21 @@ namespace DeltaResolveAccelerator
         private readonly Label footer;
         private readonly Label settingsError;
         private readonly Label keyHint;
-        private readonly TextBox gamePathBox = new TextBox();
+        private readonly Panel gameSettingsPanel = new Panel();
+        private readonly Panel softwareSettingsPanel = new Panel();
+        private readonly FlatButton gameSettingsTab = new FlatButton();
+        private readonly FlatButton softwareSettingsTab = new FlatButton();
+        private readonly FlatButton findGamesButton = new FlatButton();
+        private readonly FlatButton checkUpdatesButton = new FlatButton();
+        private readonly FlatButton repairShortcutButton = new FlatButton();
+        private readonly MintToggle automaticUpdates = new MintToggle();
+        private readonly Label softwareStatus = MakeLabel("", 9, false, Palette.Muted);
+        private readonly List<GamePathRow> gameRows = new List<GamePathRow>();
+        private readonly ToolTip pathToolTip = new ToolTip();
         private readonly TextBox keyBox = new TextBox();
         private readonly FlatButton primary = new FlatButton();
         private readonly FlatButton settingsButton = new FlatButton();
         private readonly FlatButton copyError = new FlatButton();
-        private readonly FlatButton browseButton = new FlatButton();
         private readonly FlatButton saveButton = new FlatButton();
         private readonly FlatButton cancelSettings = new FlatButton();
         private readonly FlatButton importKeyButton = new FlatButton();
@@ -510,6 +546,8 @@ namespace DeltaResolveAccelerator
         private bool allowClose;
         private bool startedThisSession;
         private bool initialStatusPending;
+        private bool softwareTabOpen, findingGames, softwareBusy, updatingPreference;
+        private Dictionary<string, string> configuredPlatforms = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private byte[] importedKey;
 
         internal MainForm(bool previewMode, string previewState) : this(previewMode, previewState, 0) { }
@@ -605,48 +643,59 @@ namespace DeltaResolveAccelerator
             copyError.Click += delegate { CopyError(); }; infoCard.Controls.Add(copyError);
 
             setupCard.Dock = DockStyle.Fill; settings.Controls.Add(setupCard);
-            Label setupTitle = MakeLabel("先完成设备设置", 22, true, Palette.Text);
-            setupTitle.SetBounds(27, 18, 620, 48); setupCard.Controls.Add(setupTitle);
-            Label setupIntro = MakeLabel("选择游戏程序，填入分配给这台电脑的独立设备密钥。", 10, false, Palette.Muted);
-            setupIntro.SetBounds(29, 72, 710, 28); setupCard.Controls.Add(setupIntro);
-            Label gameLabel = MakeLabel("游戏程序（每行一个，最多两个：Steam / WeGame）", 10, true, Palette.Text);
-            gameLabel.SetBounds(29, 114, 660, 28); setupCard.Controls.Add(gameLabel);
-            AddTextField(setupCard, gamePathBox, 29, 146, 575, 76, false);
-            gamePathBox.Multiline = true; gamePathBox.WordWrap = false;
-            gamePathBox.ScrollBars = ScrollBars.Horizontal; gamePathBox.Height = 56;
-            gamePathBox.Font = Palette.Font(8.5f, false); gamePathBox.MaxLength = 16384;
-            browseButton.Text = "选择程序"; browseButton.SetBounds(640, 148, 135, 40);
-            browseButton.Click += delegate { BrowseGame(); }; setupCard.Controls.Add(browseButton);
-            Label exeHint = MakeLabel("Steam / WeGame 按实际运行的进程自动匹配；选择程序可追加路径。\r\n每行选择一个 DeltaForceClient-Win64-Shipping.exe。", 8.5f, false, Palette.Muted);
-            exeHint.SetBounds(29, 228, 740, 40); setupCard.Controls.Add(exeHint);
+            Label setupTitle = MakeLabel("偏好设置", 20, true, Palette.Text);
+            setupTitle.SetBounds(27, 13, 380, 40); setupCard.Controls.Add(setupTitle);
+            gameSettingsTab.Text = "游戏与密钥"; gameSettingsTab.SetBounds(488, 17, 144, 36);
+            softwareSettingsTab.Text = "软件"; softwareSettingsTab.SetBounds(644, 17, 131, 36);
+            gameSettingsTab.Click += delegate { SelectSettingsTab(false); };
+            softwareSettingsTab.Click += delegate { SelectSettingsTab(true); };
+            setupCard.Controls.Add(gameSettingsTab); setupCard.Controls.Add(softwareSettingsTab);
+            gameSettingsPanel.SetBounds(29, 70, 746, 334); gameSettingsPanel.BackColor = Palette.Card;
+            softwareSettingsPanel.SetBounds(29, 70, 746, 334); softwareSettingsPanel.BackColor = Palette.Card;
+            setupCard.Controls.Add(gameSettingsPanel); setupCard.Controls.Add(softwareSettingsPanel);
+            Label gameLabel = MakeLabel("游戏位置 · 只需设置已安装的平台", 9, false, Palette.Muted);
+            gameLabel.SetBounds(0, 0, 520, 32); gameSettingsPanel.Controls.Add(gameLabel);
+            findGamesButton.Text = "自动查找"; findGamesButton.SetBounds(610, 0, 136, 32);
+            findGamesButton.Click += async delegate { await FindGamesAsync(); }; gameSettingsPanel.Controls.Add(findGamesButton);
+            CreateGameRow("Steam", 42); CreateGameRow("WeGame", 134);
             Label keyLabel = MakeLabel("独立设备密钥", 10, true, Palette.Text);
-            keyLabel.SetBounds(29, 274, 500, 28); setupCard.Controls.Add(keyLabel);
+            keyLabel.SetBounds(0, 227, 500, 28); gameSettingsPanel.Controls.Add(keyLabel);
             importKeyButton.Text = "导入已有密钥";
-            importKeyButton.SetBounds(615, 272, 160, 32);
+            importKeyButton.SetBounds(586, 225, 160, 30);
             importKeyButton.Font = Palette.Font(8.5f, false);
             importKeyButton.Click += delegate { ImportKey(); };
-            setupCard.Controls.Add(importKeyButton);
-            AddTextField(setupCard, keyBox, 29, 311, 746, 42, true);
+            gameSettingsPanel.Controls.Add(importKeyButton);
+            AddTextField(gameSettingsPanel, keyBox, 0, 263, 746, 39, true);
             keyHint = MakeLabel("每台电脑一份密钥，请勿与朋友共用。密钥仅加密保存在本机。", 8.5f, false, Palette.Muted);
-            keyHint.SetBounds(29, 361, 740, 26); setupCard.Controls.Add(keyHint);
+            keyHint.SetBounds(0, 309, 746, 24); gameSettingsPanel.Controls.Add(keyHint);
             keyBox.TextChanged += delegate { if (keyBox.TextLength > 0) ClearImportedKey(); };
             settingsError = MakeLabel("", 9, false, Palette.Error);
-            settingsError.SetBounds(29, 389, 746, 33); settingsError.AutoEllipsis = true; setupCard.Controls.Add(settingsError);
+            settingsError.SetBounds(29, 409, 746, 24); settingsError.AutoEllipsis = true; setupCard.Controls.Add(settingsError);
             saveButton.Primary = true; saveButton.Text = "保存设置";
-            saveButton.SetBounds(29, 430, 206, 42); saveButton.Click += delegate { SaveSettings(); };
+            saveButton.SetBounds(29, 441, 206, 38); saveButton.Click += delegate { SaveSettings(); };
             setupCard.Controls.Add(saveButton);
-            cancelSettings.Text = "返回"; cancelSettings.SetBounds(250, 430, 105, 42);
+            cancelSettings.Text = "返回"; cancelSettings.SetBounds(250, 441, 105, 38);
             cancelSettings.Click += delegate { ClearImportedKey(); keyBox.Clear(); settingsOpen = false; ShowCurrentView(); }; setupCard.Controls.Add(cancelSettings);
+            BuildSoftwareSettings();
 
             dashboard.Resize += delegate { LayoutDashboard(); };
             body.Resize += delegate { LayoutSettings(); };
-            timer.Interval = 8000; timer.Tick += async delegate { await RefreshStatusAsync(); };
+            timer.Interval = 8000; timer.Tick += async delegate
+            {
+                await RefreshStatusAsync();
+                if (softwareTabOpen && settingsOpen && !softwareBusy && !preview && !closing)
+                    try { softwareStatus.Text = UpdateManager.ReadStatus(root); } catch { }
+            };
+            updateTimer.Interval = 30 * 60 * 1000;
+            updateTimer.Tick += delegate { if (!preview && !closing) UpdateManager.CheckInBackground(root); };
             animationTimer.Interval = 40;
             animationTimer.Tick += delegate { RefreshWaitingPresentation(); };
             Shown += async delegate
             {
                 LayoutDashboard(); LayoutSettings();
                 if (preview) return;
+                UpdateManager.CheckInBackground(root);
+                updateTimer.Start();
                 try { await RefreshStatusAsync(); }
                 finally { initialStatusPending = false; ApplyState(); }
                 if (!closing) timer.Start();
@@ -655,10 +704,9 @@ namespace DeltaResolveAccelerator
             if (preview)
             {
                 configured = true;
-                configuredGamePaths.Add("已选择三角洲游戏程序");
-                gamePathBox.Text = configuredGamePaths[0];
+                configuredGamePaths.Add(@"D:\SteamLibrary\steamapps\common\Delta Force\Game\DeltaForce\Binaries\Win64\DeltaForceClient-Win64-Shipping.exe");
                 string requested = (previewState ?? "stopped").ToLowerInvariant();
-                settingsOpen = requested == "setup" || requested == "settings";
+                settingsOpen = requested == "setup" || requested == "settings" || requested == "software";
                 state.Phase = requested == "connected" ? "connected" : requested == "error" ? "error" : requested == "starting" ? "starting" : requested == "stopping" ? "stopping" : "stopped";
                 initialStatusPending = requested == "checking";
                 state.Ready = state.Phase == "connected";
@@ -668,11 +716,15 @@ namespace DeltaResolveAccelerator
                     state.ProgressStage = "正在等待香港解析服务就绪";
                     state.OperationStartedAt = DateTimeOffset.Now.AddSeconds(-12);
                 }
-                if (settingsOpen) { configured = requested == "settings"; gamePathBox.Text = ""; }
+                if (settingsOpen) configured = requested != "setup";
+                LoadPathRows(requested == "setup" ? new List<string>() : configuredGamePaths);
+                if (requested == "settings") { gameRows[1].Path = @"E:\WeGameApps\三角洲行动\Game\DeltaForce\Binaries\Win64\DeltaForceClient-Win64-Shipping.exe"; RefreshGameRows(); }
+                softwareTabOpen = requested == "software";
                 errorText = state.Message;
                 footer.Text = "界面预览 · 模拟状态 · 未连接服务   /   试用至 2026-11-13";
             }
             else { LoadSettings(); initialStatusPending = true; }
+            if (softwareTabOpen) RefreshSoftwareSettings();
             ApplyState();
             ResumeLayout(false); PerformLayout(); LayoutDashboard(); LayoutSettings();
             float scale;
@@ -725,10 +777,164 @@ namespace DeltaResolveAccelerator
         {
             int width = setupCard.ClientSize.Width;
             if (width < 300) return;
-            gamePathBox.Parent.Width = width - Px(209); browseButton.Left = width - Px(164);
-            keyBox.Parent.Width = width - Px(58);
-            importKeyButton.Left = width - Px(189);
+            softwareSettingsTab.Left = width - Px(160); gameSettingsTab.Left = width - Px(316);
+            gameSettingsPanel.Width = softwareSettingsPanel.Width = width - Px(58);
+            int content = gameSettingsPanel.ClientSize.Width;
+            findGamesButton.Left = content - Px(136);
+            foreach (GamePathRow row in gameRows)
+            {
+                row.Card.Width = content;
+                row.Status.Left = content - Px(250); row.Status.Width = Px(232);
+                row.ChooseFile.Left = content - Px(253); row.ChooseFolder.Left = content - Px(171); row.Clear.Left = content - Px(74);
+                row.PathLabel.Width = content - Px(285);
+            }
+            keyBox.Parent.Width = content;
+            keyHint.Width = content;
+            importKeyButton.Left = content - Px(160);
             settingsError.Width = width - Px(58);
+            softwareStatus.Width = content;
+            repairShortcutButton.Left = content - Px(176);
+        }
+        private sealed class GamePathRow
+        {
+            internal string Slot, Platform, Path = "";
+            internal Surface Card;
+            internal Label Title, Status, PathLabel;
+            internal FlatButton ChooseFile, ChooseFolder, Clear;
+        }
+        private void CreateGameRow(string platform, int top)
+        {
+            GamePathRow row = new GamePathRow { Slot = platform, Platform = platform,
+                Card = new Surface { Fill = Palette.Background, Radius = 14 },
+                Title = MakeLabel(platform, 10, true, Palette.Text),
+                Status = MakeLabel("未设置", 8.5f, false, Palette.Muted),
+                PathLabel = MakeLabel("选择游戏程序或安装文件夹", 8.5f, false, Palette.Muted),
+                ChooseFile = new FlatButton(), ChooseFolder = new FlatButton(), Clear = new FlatButton() };
+            row.Card.SetBounds(0, top, 746, 82); row.Title.SetBounds(16, 5, 440, 28);
+            row.Status.SetBounds(496, 5, 232, 28); row.Status.TextAlign = ContentAlignment.MiddleRight;
+            row.PathLabel.SetBounds(16, 41, 461, 27); row.PathLabel.AutoEllipsis = true;
+            row.ChooseFile.Text = "选程序"; row.ChooseFile.SetBounds(493, 39, 76, 30);
+            row.ChooseFolder.Text = "选文件夹"; row.ChooseFolder.SetBounds(575, 39, 91, 30);
+            row.Clear.Text = "移除"; row.Clear.SetBounds(672, 39, 58, 30);
+            row.ChooseFile.Font = row.ChooseFolder.Font = row.Clear.Font = Palette.Font(8.5f, false);
+            row.ChooseFile.Click += async delegate { await BrowseGameAsync(row, false); };
+            row.ChooseFolder.Click += async delegate { await BrowseGameAsync(row, true); };
+            row.Clear.Click += delegate { row.Path = ""; row.Platform = row.Slot; RefreshGameRows(); settingsError.Text = "已移除，保存后生效。"; };
+            row.Card.Controls.Add(row.Title); row.Card.Controls.Add(row.Status); row.Card.Controls.Add(row.PathLabel);
+            row.Card.Controls.Add(row.ChooseFile); row.Card.Controls.Add(row.ChooseFolder); row.Card.Controls.Add(row.Clear);
+            gameSettingsPanel.Controls.Add(row.Card); gameRows.Add(row);
+        }
+        private void LoadPathRows(IList<string> paths)
+        {
+            foreach (GamePathRow row in gameRows) { row.Path = ""; row.Platform = row.Slot; }
+            foreach (string path in paths)
+            {
+                string platform;
+                if (!configuredPlatforms.TryGetValue(path, out platform)) platform = GameDiscovery.DetectPlatform(path);
+                GamePathRow available = gameRows.Find(delegate(GamePathRow row) { return row.Path.Length == 0 && row.Slot == platform; });
+                if (available == null) available = gameRows.Find(delegate(GamePathRow row) { return row.Path.Length == 0; });
+                if (available == null) { settingsError.Text = GamePathLimitMessage; break; }
+                available.Path = path; available.Platform = platform;
+            }
+            RefreshGameRows();
+        }
+        private void RefreshGameRows()
+        {
+            foreach (GamePathRow row in gameRows)
+            {
+                bool present = row.Path.Length > 0;
+                bool valid = present && (preview ? row == gameRows[0] : ValidGamePath(row.Path));
+                row.Title.Text = present && row.Platform.Length == 0 ? "已保存路径 · 未分类" : present ? row.Platform : row.Slot;
+                row.Status.Text = !present ? "未设置 · 可选" : valid ? "●  可用" : "●  路径失效 · 重新选择";
+                row.Status.ForeColor = !present ? Palette.Muted : valid ? Palette.Teal : Palette.Amber;
+                row.PathLabel.Text = present ? row.Path : "选择游戏程序或安装文件夹";
+                row.ChooseFile.Text = present ? "替换" : "选程序";
+                row.Clear.Enabled = present && !busy && !findingGames;
+                pathToolTip.SetToolTip(row.PathLabel, present ? row.Path : "可以选择游戏安装文件夹，自动定位游戏程序。");
+            }
+        }
+        private void BuildSoftwareSettings()
+        {
+            Label version = MakeLabel("三角洲加速器  " + Application.ProductVersion, 16, true, Palette.Text);
+            version.SetBounds(0, 0, 730, 34); softwareSettingsPanel.Controls.Add(version);
+            automaticUpdates.Text = "自动检查更新"; automaticUpdates.Font = Palette.Font(10, true);
+            automaticUpdates.ForeColor = Palette.Text; automaticUpdates.BackColor = Palette.Card;
+            automaticUpdates.SetBounds(0, 56, 730, 29); softwareSettingsPanel.Controls.Add(automaticUpdates);
+            Label updateNote = MakeLabel("启动时检查新版本，更新就绪后将在下次启动时安装。", 9, false, Palette.Muted);
+            updateNote.SetBounds(0, 91, 730, 27); softwareSettingsPanel.Controls.Add(updateNote);
+            checkUpdatesButton.Text = "检查更新"; checkUpdatesButton.Primary = true;
+            checkUpdatesButton.SetBounds(0, 133, 170, 38); softwareSettingsPanel.Controls.Add(checkUpdatesButton);
+            checkUpdatesButton.Click += async delegate { await CheckSoftwareUpdateAsync(); };
+            softwareStatus.SetBounds(0, 181, 746, 44); softwareStatus.AutoEllipsis = true; softwareSettingsPanel.Controls.Add(softwareStatus);
+            Label shortcutTitle = MakeLabel("桌面快捷方式", 11, true, Palette.Text);
+            shortcutTitle.SetBounds(0, 245, 520, 28); softwareSettingsPanel.Controls.Add(shortcutTitle);
+            Label shortcutHint = MakeLabel("重新建立桌面和开始菜单入口，之后更新可继续使用同一个快捷方式。", 9, false, Palette.Muted);
+            shortcutHint.SetBounds(0, 285, 730, 44); softwareSettingsPanel.Controls.Add(shortcutHint);
+            repairShortcutButton.Text = "修复快捷方式"; repairShortcutButton.SetBounds(570, 241, 176, 38);
+            repairShortcutButton.Click += async delegate { await RepairShortcutAsync(); }; softwareSettingsPanel.Controls.Add(repairShortcutButton);
+            automaticUpdates.CheckedChanged += delegate
+            {
+                if (preview || updatingPreference) return;
+                try { UpdateManager.SetAutomaticChecksEnabled(root, automaticUpdates.Checked); softwareStatus.Text = automaticUpdates.Checked ? "已开启自动检查更新。" : "已关闭自动检查，可随时手动检查。"; }
+                catch { softwareStatus.Text = "偏好未保存，请检查安装目录写入权限。"; RefreshSoftwareSettings(); }
+            };
+        }
+        private void RefreshSoftwareSettings()
+        {
+            updatingPreference = true;
+            try
+            {
+                automaticUpdates.Checked = preview || UpdateManager.AutomaticChecksEnabled(root);
+                softwareStatus.Text = preview ? "当前已是最新版本 · 自动更新已开启" : UpdateManager.ReadStatus(root);
+            }
+            catch { softwareStatus.Text = "无法读取更新状态，请稍后重试。"; }
+            finally { updatingPreference = false; }
+        }
+        private void SelectSettingsTab(bool software, bool refresh = true)
+        {
+            softwareTabOpen = software;
+            gameSettingsPanel.Visible = !software; softwareSettingsPanel.Visible = software;
+            gameSettingsTab.Primary = !software; softwareSettingsTab.Primary = software;
+            gameSettingsTab.Invalidate(); softwareSettingsTab.Invalidate();
+            saveButton.Visible = !software;
+            cancelSettings.Visible = configured || software;
+            settingsError.Visible = !software;
+            if (software && refresh) RefreshSoftwareSettings();
+        }
+        private async Task CheckSoftwareUpdateAsync()
+        {
+            if (preview || softwareBusy || closing) return;
+            softwareBusy = true; checkUpdatesButton.Enabled = repairShortcutButton.Enabled = false;
+            softwareStatus.Text = "正在检查更新…";
+            try
+            {
+                await Task.Run(delegate { return UpdateManager.CheckNow(root); });
+                if (!IsDisposed) softwareStatus.Text = UpdateManager.ReadStatus(root);
+            }
+            catch { if (!IsDisposed) softwareStatus.Text = "暂时无法检查更新，请稍后重试。"; }
+            finally { softwareBusy = false; if (!IsDisposed) checkUpdatesButton.Enabled = repairShortcutButton.Enabled = true; }
+        }
+        private async Task RepairShortcutAsync()
+        {
+            if (preview || softwareBusy || closing) return;
+            softwareBusy = true; checkUpdatesButton.Enabled = repairShortcutButton.Enabled = false;
+            softwareStatus.Text = "正在修复桌面和开始菜单快捷方式…";
+            try
+            {
+                int exitCode = await Task.Run(delegate
+                {
+                    string launcher = Path.Combine(root, "DeltaLauncher.exe");
+                    using (Process process = Process.Start(new ProcessStartInfo(launcher, "--repair-shortcuts")
+                    { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden }))
+                    {
+                        if (!process.WaitForExit(15000)) return -1;
+                        return process.ExitCode;
+                    }
+                });
+                if (!IsDisposed) softwareStatus.Text = exitCode == 0 ? "桌面和开始菜单快捷方式已修复。" : "快捷方式修复未完成，请稍后重试。";
+            }
+            catch { if (!IsDisposed) softwareStatus.Text = "未找到完整安装程序，请重新运行安装包以修复入口。"; }
+            finally { softwareBusy = false; if (!IsDisposed) checkUpdatesButton.Enabled = repairShortcutButton.Enabled = true; }
         }
         private int Px(int designPixels) { return (int)Math.Round(designPixels * UiScale); }
 
@@ -1079,11 +1285,17 @@ namespace DeltaResolveAccelerator
                 active ? "关闭加速" : state.Phase == "error" ? "关闭并恢复" : configured ? "开启加速" : "完成设备设置";
             primary.Enabled = !transitioning && !closing;
             settingsButton.Enabled = !busy && !closing && state.Phase == "stopped";
-            saveButton.Enabled = !busy && !closing && state.Phase == "stopped";
-            browseButton.Enabled = saveButton.Enabled; gamePathBox.ReadOnly = !saveButton.Enabled;
+            saveButton.Enabled = !busy && !closing && !findingGames && state.Phase == "stopped";
+            findGamesButton.Enabled = saveButton.Enabled && !findingGames;
+            foreach (GamePathRow row in gameRows)
+            {
+                row.ChooseFile.Enabled = row.ChooseFolder.Enabled = saveButton.Enabled && !findingGames;
+                row.Clear.Enabled = saveButton.Enabled && !findingGames && row.Path.Length > 0;
+            }
             importKeyButton.Enabled = saveButton.Enabled;
             keyBox.ReadOnly = !saveButton.Enabled;
             cancelSettings.Visible = configured;
+            SelectSettingsTab(softwareTabOpen, false);
             copyError.Visible = state.Phase == "error" && !String.IsNullOrEmpty(errorText);
             infoText.ForeColor = copyError.Visible ? Palette.Error : Palette.Muted;
             infoText.Text = copyError.Visible ? Short(errorText, 190) : active ?
@@ -1129,10 +1341,10 @@ namespace DeltaResolveAccelerator
                 {
                     Dictionary<string, object> data = ReadJson(settingsPath);
                     configuredGamePaths = ReadGamePaths(data);
+                    configuredPlatforms = ReadPathPlatforms(data);
                     connectionWait.LastSuccessfulWaitSeconds = ReadSuccessfulStartupWait(data);
                 }
-                if (configuredGamePaths.Count == 0) AddGamePath(configuredGamePaths, FindSteamGame());
-                gamePathBox.Text = String.Join(Environment.NewLine, configuredGamePaths);
+                LoadPathRows(configuredGamePaths);
                 configured = ValidateSetupPaths(configuredGamePaths, "", File.Exists(keyPath)) == null;
                 settingsOpen = !configured;
                 keyHint.Text = File.Exists(keyPath) ?
@@ -1143,53 +1355,112 @@ namespace DeltaResolveAccelerator
         }
         private void OpenSettings()
         {
-            gamePathBox.Text = String.Join(Environment.NewLine, configuredGamePaths); keyBox.Clear(); ClearImportedKey(); settingsError.Text = "";
+            LoadPathRows(configuredGamePaths); keyBox.Clear(); ClearImportedKey(); settingsError.Text = "";
             settingsOpen = true; ApplyState();
         }
-        private void BrowseGame()
+        private async Task BrowseGameAsync(GamePathRow row, bool folder)
         {
-            if (preview || busy || state.Phase != "stopped") return;
+            if (preview || busy || findingGames || state.Phase != "stopped") return;
+            if (folder)
+            {
+                using (FolderBrowserDialog dialog = new FolderBrowserDialog())
+                {
+                    dialog.Description = "选择 " + row.Slot + " 的三角洲安装文件夹";
+                    dialog.ShowNewFolderButton = false;
+                    if (ValidGamePath(row.Path)) dialog.SelectedPath = Path.GetDirectoryName(row.Path);
+                    if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                    string selected = dialog.SelectedPath;
+                    findingGames = true; settingsError.Text = "正在定位所选文件夹中的游戏程序…"; ApplyState();
+                    try
+                    {
+                        List<GameLocation> matches = await Task.Run(delegate { return GameDiscovery.FindInFolder(selected, row.Slot); });
+                        if (IsDisposed || closing) return;
+                        if (matches.Count == 0) { settingsError.Text = "此文件夹未找到游戏，请选择三角洲安装文件夹或直接选择游戏程序。"; return; }
+                        if (matches.Count > 1) { settingsError.Text = "此文件夹包含多个游戏程序，请进入具体安装文件夹或使用“选程序”。"; return; }
+                        SetGameRow(row, matches[0].Path, row.Slot);
+                    }
+                    catch { if (!IsDisposed) settingsError.Text = "无法读取所选文件夹，原有位置已保留。"; }
+                    finally { findingGames = false; if (!IsDisposed) ApplyState(); }
+                }
+                return;
+            }
             using (OpenFileDialog dialog = new OpenFileDialog())
             {
-                dialog.Title = "选择 Steam 或 WeGame 三角洲游戏程序（追加到列表）";
-                dialog.Filter = "游戏程序 (*.exe)|*.exe"; dialog.CheckFileExists = true;
-                List<string> paths = ParseGamePathText(gamePathBox.Text);
-                if (paths.Count > 0 && File.Exists(paths[paths.Count - 1])) dialog.FileName = paths[paths.Count - 1];
+                dialog.Title = "选择 " + row.Slot + " 三角洲游戏程序";
+                dialog.Filter = "三角洲游戏程序 (DeltaForceClient-Win64-Shipping.exe)|DeltaForceClient-Win64-Shipping.exe";
+                dialog.CheckFileExists = true;
+                if (ValidGamePath(row.Path)) dialog.FileName = row.Path;
                 if (dialog.ShowDialog(this) == DialogResult.OK)
                 {
-                    if (!paths.Exists(delegate(string item) { return String.Equals(item, dialog.FileName, StringComparison.OrdinalIgnoreCase); }))
-                        paths.Add(dialog.FileName);
-                    string validation = ValidateSetupPaths(paths, "", true);
-                    if (validation != null) { settingsError.Text = validation; return; }
-                    gamePathBox.Text = String.Join(Environment.NewLine, paths);
-                    settingsError.Text = "";
+                    if (!ValidGamePath(dialog.FileName)) { settingsError.Text = "请选择 DeltaForceClient-Win64-Shipping.exe。"; return; }
+                    SetGameRow(row, dialog.FileName, row.Slot);
                 }
             }
         }
+        private bool SetGameRow(GamePathRow row, string path, string platform)
+        {
+            string full = Path.GetFullPath(path);
+            if (gameRows.Exists(delegate(GamePathRow other) { return other != row && String.Equals(other.Path, full, StringComparison.OrdinalIgnoreCase); }))
+            { settingsError.Text = "这个游戏程序已在另一个位置中，无需重复添加。"; return false; }
+            row.Path = full; row.Platform = platform; RefreshGameRows();
+            settingsError.Text = "位置已选择，保存后生效。"; return true;
+        }
+        private async Task FindGamesAsync()
+        {
+            if (preview || busy || findingGames || state.Phase != "stopped") return;
+            findingGames = true; findGamesButton.Text = "查找中…"; settingsError.Text = "正在检查运行中的游戏和平台安装记录…"; ApplyState();
+            try
+            {
+                List<GameLocation> found = await Task.Run(delegate { return GameDiscovery.Discover(); });
+                if (IsDisposed || closing) return;
+                found.Sort(delegate(GameLocation first, GameLocation second) { return String.IsNullOrEmpty(first.Platform).CompareTo(String.IsNullOrEmpty(second.Platform)); });
+                int added = 0;
+                foreach (GameLocation location in found)
+                {
+                    if (gameRows.Exists(delegate(GamePathRow row) { return String.Equals(row.Path, location.Path, StringComparison.OrdinalIgnoreCase); })) continue;
+                    GamePathRow available = gameRows.Find(delegate(GamePathRow row) { return row.Path.Length == 0 && row.Slot == location.Platform; });
+                    if (available == null && location.Platform.Length == 0) available = gameRows.Find(delegate(GamePathRow row) { return row.Path.Length == 0; });
+                    if (available != null && SetGameRow(available, location.Path, location.Platform)) added++;
+                }
+                settingsError.Text = added > 0 ? "找到 " + added + " 个可用游戏位置，保存后生效。" : found.Count > 0 ?
+                    "已找到安装；现有位置已保留，需要更换时请使用“替换”。" : "未找到安装记录，可启动游戏后重试，或手动选择安装文件夹。";
+            }
+            catch { if (!IsDisposed) settingsError.Text = "自动查找未完成，现有位置已保留，可手动选择。"; }
+            finally { findingGames = false; if (!IsDisposed) { findGamesButton.Text = "自动查找"; ApplyState(); } }
+        }
         internal static bool ValidGamePath(string path)
         {
-            return !String.IsNullOrWhiteSpace(path) && File.Exists(path) &&
-                String.Equals(Path.GetFileName(path), "DeltaForceClient-Win64-Shipping.exe", StringComparison.OrdinalIgnoreCase);
+            return GameDiscovery.IsGameExecutable(path);
         }
         private void SaveSettings()
         {
-            if (preview || busy || state.Phase != "stopped") return;
-            List<string> paths = ParseGamePathText(gamePathBox.Text);
+            if (preview || busy || findingGames || state.Phase != "stopped") return;
+            List<string> paths = new List<string>();
+            Dictionary<string, string> platforms = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (GamePathRow row in gameRows)
+            {
+                if (row.Path.Length == 0) continue;
+                if (!ValidGamePath(row.Path)) { settingsError.Text = "有游戏路径已失效，请重新选择或移除后再保存。"; return; }
+                AddGamePath(paths, row.Path); platforms[row.Path] = row.Platform;
+            }
             string secret = keyBox.Text.Trim();
-            string validation = ValidateSetupPaths(paths, secret, File.Exists(keyPath) || importedKey != null);
+            string validation = paths.Count > 0 ? ValidateSetupPaths(paths, secret, File.Exists(keyPath) || importedKey != null) :
+                ValidateSecretInput(secret, File.Exists(keyPath) || importedKey != null);
             if (validation != null) { settingsError.Text = validation; return; }
             byte[] plain = null;
             try
             {
+                if (File.Exists(settingsPath)) ReadJson(settingsPath); // Fail before replacing any key if settings are unreadable.
                 if (secret.Length > 0 || importedKey != null)
                 {
                     plain = importedKey != null ? (byte[])importedKey.Clone() : Encoding.UTF8.GetBytes(secret);
                     SaveEncryptedKey(privateDirectory, keyPath, plain);
                 }
-                SaveSettingsJson(settingsPath, paths);
-                configuredGamePaths = ReadGamePaths(ReadJson(settingsPath)); configured = true; settingsOpen = false;
+                SavePathSettingsJson(settingsPath, paths, platforms);
+                configuredGamePaths = paths; configuredPlatforms = platforms; configured = paths.Count > 0; settingsOpen = !configured;
                 keyBox.Clear(); ClearImportedKey(); settingsError.Text = ""; errorText = ""; state.Phase = "stopped";
                 keyHint.Text = "本机已保存独立密钥。留空保留当前密钥；输入新密钥可替换。";
+                if (!configured) settingsError.Text = "已保存。选择一个游戏位置后即可开启加速。";
                 ApplyState();
             }
             catch (Exception ex) { settingsError.Text = "设置保存失败（" + ex.GetType().Name + "），请确认安装目录可写。"; }
@@ -1198,6 +1469,10 @@ namespace DeltaResolveAccelerator
         internal static string ValidateSetupInput(string game, string secret, bool existingKey)
         {
             if (!ValidGamePath(game)) return "请选择正确的 DeltaForceClient-Win64-Shipping.exe。";
+            return ValidateSecretInput(secret, existingKey);
+        }
+        private static string ValidateSecretInput(string secret, bool existingKey)
+        {
             if (String.IsNullOrWhiteSpace(secret) && !existingKey) return "请输入分配给这台电脑的独立设备密钥。";
             if (!String.IsNullOrEmpty(secret) && (secret.Length > 8192 || secret.IndexOfAny(new char[] { '\r', '\n', '\0' }) >= 0))
                 return "设备密钥格式无效，请重新粘贴完整密钥。";
@@ -1256,6 +1531,42 @@ namespace DeltaResolveAccelerator
             if (normalized.Count > MaximumGamePaths) throw new InvalidDataException(GamePathLimitMessage);
             Dictionary<string, object> data = File.Exists(path) ? ReadJson(path) : new Dictionary<string, object>();
             data["gameExecutable"] = normalized[0]; data["gameExecutables"] = normalized.ToArray();
+            data["trialDeadline"] = TrialDeadline;
+            AtomicWrite(path, new UTF8Encoding(false).GetBytes(new JavaScriptSerializer().Serialize(data)));
+        }
+        internal static Dictionary<string, string> ReadPathPlatforms(Dictionary<string, object> data)
+        {
+            Dictionary<string, string> platforms = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            object raw;
+            if (!data.TryGetValue("gamePathPlatforms", out raw)) return platforms;
+            Dictionary<string, object> saved = raw as Dictionary<string, object>;
+            if (saved == null) return platforms;
+            foreach (KeyValuePair<string, object> item in saved)
+            {
+                string platform = item.Value as string;
+                if (platform == "Steam" || platform == "WeGame" || platform == "") platforms[item.Key] = platform;
+            }
+            return platforms;
+        }
+        internal static void SavePathSettingsJson(string path, IEnumerable<string> games, IDictionary<string, string> platforms)
+        {
+            List<string> normalized = new List<string>();
+            foreach (string game in games)
+            {
+                if (!ValidGamePath(game)) throw new InvalidDataException("A selected game executable is unavailable.");
+                AddGamePath(normalized, game);
+            }
+            if (normalized.Count > MaximumGamePaths) throw new InvalidDataException(GamePathLimitMessage);
+            Dictionary<string, object> data = File.Exists(path) ? ReadJson(path) : new Dictionary<string, object>();
+            Dictionary<string, string> savedPlatforms = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string game in normalized)
+            {
+                string platform;
+                if (!platforms.TryGetValue(game, out platform)) platform = GameDiscovery.DetectPlatform(game);
+                savedPlatforms[game] = platform == "Steam" || platform == "WeGame" ? platform : "";
+            }
+            data["gameExecutable"] = normalized.Count > 0 ? normalized[0] : "";
+            data["gameExecutables"] = normalized.ToArray(); data["gamePathPlatforms"] = savedPlatforms;
             data["trialDeadline"] = TrialDeadline;
             AtomicWrite(path, new UTF8Encoding(false).GetBytes(new JavaScriptSerializer().Serialize(data)));
         }
@@ -1339,38 +1650,6 @@ namespace DeltaResolveAccelerator
                 if (File.Exists(path)) File.Replace(temp, path, null); else File.Move(temp, path);
             }
             finally { if (File.Exists(temp)) File.Delete(temp); }
-        }
-        private static string FindSteamGame()
-        {
-            HashSet<string> roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            try
-            {
-                object user = Registry.GetValue(@"HKEY_CURRENT_USER\Software\Valve\Steam", "SteamPath", null);
-                object machine = Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath", null);
-                if (user != null) roots.Add(Convert.ToString(user));
-                if (machine != null) roots.Add(Convert.ToString(machine));
-                string defaultSteam = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Steam");
-                if (Directory.Exists(defaultSteam)) roots.Add(defaultSteam);
-                List<string> initial = new List<string>(roots);
-                foreach (string steam in initial)
-                {
-                    string vdf = Path.Combine(steam, "steamapps", "libraryfolders.vdf");
-                    if (!File.Exists(vdf) || new FileInfo(vdf).Length > 1048576) continue;
-                    foreach (Match match in Regex.Matches(File.ReadAllText(vdf), "\"path\"\\s*\"([^\"]+)\""))
-                        roots.Add(match.Groups[1].Value.Replace(@"\\", @"\"));
-                }
-                foreach (string library in roots)
-                {
-                    foreach (string gameFolder in new string[] { "Delta Force", "DeltaForce" })
-                    {
-                        string candidate = Path.Combine(new string[] { library, "steamapps", "common", gameFolder,
-                            "Game", "DeltaForce", "Binaries", "Win64", "DeltaForceClient-Win64-Shipping.exe" });
-                        if (ValidGamePath(candidate)) return candidate;
-                    }
-                }
-            }
-            catch { }
-            return "";
         }
         private async Task ToggleAsync()
         {
@@ -1528,7 +1807,7 @@ namespace DeltaResolveAccelerator
             if (preview || allowClose) return;
             e.Cancel = true;
             if (closing) return;
-            closing = true; timer.Stop(); ApplyState();
+            closing = true; timer.Stop(); updateTimer.Stop(); ApplyState();
             await operationGate.WaitAsync();
             busy = true;
             try
@@ -1554,7 +1833,7 @@ namespace DeltaResolveAccelerator
         }
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { timer.Dispose(); animationTimer.Dispose(); ClearImportedKey(); }
+            if (disposing) { timer.Dispose(); animationTimer.Dispose(); updateTimer.Dispose(); pathToolTip.Dispose(); ClearImportedKey(); }
             base.Dispose(disposing);
             if (disposing) { foreach (Font font in scaledFonts) font.Dispose(); scaledFonts.Clear(); }
         }
@@ -1710,6 +1989,29 @@ namespace DeltaResolveAccelerator
                 bool recheckClockReset = missedReady.ElapsedSeconds(epoch.AddSeconds(12)) == 3;
                 missedReady.Update(new BackendState { Phase = "connected", Ready = true }, false, epoch.AddSeconds(15));
                 results["changedBackendOriginDoesNotMislabelHealthRecheck"] = recheckClockReset && !missedReady.LastSuccessfulWaitSeconds.HasValue;
+                Dictionary<string, string> platforms = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                platforms[game] = "Steam"; platforms[secondGame] = "";
+                MainForm.SavePathSettingsJson(settings, new string[] { game, secondGame }, platforms);
+                data = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(settings, Encoding.UTF8)) as Dictionary<string, object>;
+                results["pathRowsPreserveUnknownPlatform"] = MainForm.ReadPathPlatforms(data)[secondGame] == "" && MainForm.ReadPathPlatforms(data)[game] == "Steam";
+                MainForm.SavePathSettingsJson(settings, new string[] { secondGame }, platforms);
+                data = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(settings, Encoding.UTF8)) as Dictionary<string, object>;
+                results["explicitPathRemovalUpdatesLegacyAndArray"] = MainForm.ReadGamePaths(data).Count == 1 &&
+                    (string)data["gameExecutable"] == secondGame && !MainForm.ReadPathPlatforms(data).ContainsKey(game);
+                string beforeInvalid = File.ReadAllText(settings, Encoding.UTF8);
+                bool unavailableRejected = false;
+                try { MainForm.SavePathSettingsJson(settings, new string[] { game, Path.Combine(test, "not-installed", GameDiscovery.ExecutableName) }, platforms); }
+                catch (InvalidDataException) { unavailableRejected = true; }
+                results["unavailablePathCannotSilentlyEraseSettings"] = unavailableRejected && File.ReadAllText(settings, Encoding.UTF8) == beforeInvalid;
+                MainForm.SavePathSettingsJson(settings, new string[0], platforms);
+                data = new JavaScriptSerializer().DeserializeObject(File.ReadAllText(settings, Encoding.UTF8)) as Dictionary<string, object>;
+                results["explicitClearAllPathsPersists"] = MainForm.ReadGamePaths(data).Count == 0 && (string)data["gameExecutable"] == "";
+                results["pathRowsPreserveOtherSettings"] = (string)data["unrelatedSetting"] == "preserved" && MainForm.ReadSuccessfulStartupWait(data) == 12.3;
+                string brokenSettings = Path.Combine(test, "broken-settings.json"); File.WriteAllText(brokenSettings, "{broken");
+                bool unreadableRejected = false;
+                try { MainForm.SavePathSettingsJson(brokenSettings, new string[] { game }, platforms); }
+                catch { unreadableRejected = true; }
+                results["unreadableSettingsNeverOverwrittenByPathSave"] = unreadableRejected && File.ReadAllText(brokenSettings) == "{broken";
             }
             catch (Exception ex) { results["failureType"] = ex.GetType().Name; }
             finally
