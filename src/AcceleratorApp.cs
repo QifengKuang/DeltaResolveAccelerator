@@ -32,6 +32,8 @@ namespace DeltaResolveAccelerator
             Application.SetCompatibleTextRenderingDefault(false);
             string previewPath = null, previewState = "stopped", selfTestPath = null;
             float previewScale = 0;
+            string previewSize = null;
+            bool resizeTest = false, interactivePreview = false, nativePreview = false;
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--preview" && i + 1 < args.Length) previewPath = args[++i];
@@ -39,28 +41,47 @@ namespace DeltaResolveAccelerator
                 else if (args[i] == "--self-test" && i + 1 < args.Length) selfTestPath = args[++i];
                 else if (args[i] == "--preview-scale" && i + 1 < args.Length)
                     previewScale = Single.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture);
+                else if (args[i] == "--preview-size" && i + 1 < args.Length) previewSize = args[++i];
+                else if (args[i] == "--preview-resize-test") resizeTest = true;
+                else if (args[i] == "--preview-interactive") interactivePreview = true;
+                else if (args[i] == "--preview-native") nativePreview = true;
             }
             if (selfTestPath != null) { Environment.ExitCode = OfflineTests.Run(selfTestPath); return; }
             if (previewPath != null)
             {
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.ThrowException);
+                try
+                {
                 // Preview deliberately bypasses mutex, settings, credentials and backend.
                 using (MainForm form = new MainForm(true, previewState, previewScale))
                 {
+                    if (previewSize != null) form.SetPreviewSize(previewSize);
+                    if (interactivePreview) { form.Text += " · 界面预览"; Application.Run(form); return; }
                     form.ShowInTaskbar = false;
                     form.StartPosition = FormStartPosition.Manual;
                     form.Location = new Point(-30000, -30000);
-                    form.Opacity = 0;
+                    form.Opacity = nativePreview ? 1 : 0;
                     form.Show();
                     Application.DoEvents();
+                    if (resizeTest) form.VerifyRepeatedResize();
                     string absolute = Path.GetFullPath(previewPath);
                     Directory.CreateDirectory(Path.GetDirectoryName(absolute));
                     using (Bitmap bitmap = new Bitmap(form.Width, form.Height))
                     {
-                        form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size));
+                        if (nativePreview) form.PaintNativePreview(bitmap);
+                        else form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size));
                         bitmap.Save(absolute, ImageFormat.Png);
                     }
                     File.WriteAllText(absolute + ".layout.json", form.LayoutReport(), Encoding.UTF8);
                     form.Close();
+                }
+                }
+                catch (Exception ex)
+                {
+                    string failurePath = Path.GetFullPath(previewPath) + ".error.txt";
+                    Directory.CreateDirectory(Path.GetDirectoryName(failurePath));
+                    File.WriteAllText(failurePath, ex.ToString(), Encoding.UTF8);
+                    Environment.ExitCode = 1;
                 }
                 return;
             }
@@ -109,6 +130,21 @@ namespace DeltaResolveAccelerator
             MainForm form = control.FindForm() as MainForm;
             return form == null ? 1f : form.UiScale;
         }
+        internal static void PaintBackdrop(Control child, Graphics graphics)
+        {
+            Control parent = child.Parent;
+            if (parent == null) { graphics.Clear(Background); return; }
+            Surface surface = parent as Surface;
+            if (surface == null)
+            {
+                graphics.Clear(parent.BackColor.A == 255 ? parent.BackColor : Background);
+                return;
+            }
+            GraphicsState saved = graphics.Save();
+            graphics.TranslateTransform(-child.Left, -child.Top);
+            surface.PaintSurface(graphics);
+            graphics.Restore(saved);
+        }
         internal static GraphicsPath Rounded(RectangleF rect, float radius)
         {
             float d = Math.Min(radius * 2, Math.Min(rect.Width, rect.Height));
@@ -132,18 +168,24 @@ namespace DeltaResolveAccelerator
         internal Surface()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
-                ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.SupportsTransparentBackColor, true);
-            BackColor = Color.Transparent;
+                ControlStyles.UserPaint | ControlStyles.ResizeRedraw | ControlStyles.Opaque, true);
+            BackColor = Palette.Background;
         }
-        protected override void OnPaint(PaintEventArgs e)
+        internal void PaintSurface(Graphics graphics)
         {
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            if (Width < 2 || Height < 2) return;
+            Palette.PaintBackdrop(this, graphics);
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
             float scale = Palette.Scale(this);
             using (GraphicsPath path = Palette.Rounded(new RectangleF(.5f, .5f, Width - 1, Height - 1), Radius * scale))
             using (Brush brush = GradientEnd.IsEmpty ? (Brush)new SolidBrush(Fill) :
                 new LinearGradientBrush(ClientRectangle, Fill, GradientEnd, 18f))
             using (Pen pen = new Pen(Stroke))
-            { e.Graphics.FillPath(brush, path); if (Outline) e.Graphics.DrawPath(pen, path); }
+            { graphics.FillPath(brush, path); if (Outline) graphics.DrawPath(pen, path); }
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            PaintSurface(e.Graphics);
             base.OnPaint(e);
         }
     }
@@ -155,20 +197,23 @@ namespace DeltaResolveAccelerator
         internal FlatButton()
         {
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
-                ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+                ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.Opaque, true);
             FlatStyle = FlatStyle.Flat;
             FlatAppearance.BorderSize = 0;
             Font = Palette.Font(10.5f, true);
             Cursor = Cursors.Hand;
             TabStop = true;
-            SetStyle(ControlStyles.SupportsTransparentBackColor, true);
-            BackColor = Color.Transparent;
+            UseVisualStyleBackColor = false;
+            BackColor = Palette.Background;
         }
         protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
         protected override void OnEnabledChanged(EventArgs e) { Invalidate(); base.OnEnabledChanged(e); }
         protected override void OnPaint(PaintEventArgs e)
         {
+            // ButtonBase's transparent themed buffer can leave black pixels in live WM_PAINT.
+            // Paint the entire rectangle explicitly, including the parent gradient at corners.
+            Palette.PaintBackdrop(this, e.Graphics);
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             Color fill = Primary ? Palette.Teal : Palette.Raised;
             if (!Enabled) fill = Color.FromArgb(220, 230, 219);
@@ -213,6 +258,39 @@ namespace DeltaResolveAccelerator
             }
             if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -6, -6));
         }
+    }
+
+    internal sealed class ResizeHandle : Control
+    {
+        internal int Edge;
+        private Point dragOrigin;
+        private Rectangle originalBounds;
+        private bool dragging;
+        internal ResizeHandle(int edge)
+        {
+            Edge = edge; BackColor = Palette.Background; TabStop = false;
+            Cursor = edge == 10 || edge == 11 ? Cursors.SizeWE : edge == 12 || edge == 15 ? Cursors.SizeNS :
+                edge == 13 || edge == 17 ? Cursors.SizeNWSE : Cursors.SizeNESW;
+        }
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            base.OnMouseDown(e);
+            if (e.Button != MouseButtons.Left) return;
+            Form form = FindForm(); if (form == null) return;
+            dragOrigin = PointToScreen(e.Location); originalBounds = form.Bounds;
+            dragging = true; Capture = true;
+        }
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            MainForm form = FindForm() as MainForm;
+            if (!dragging || !Capture || form == null) return;
+            Point current = PointToScreen(e.Location);
+            form.Bounds = MainForm.DragBounds(originalBounds, Edge, current.X - dragOrigin.X, current.Y - dragOrigin.Y,
+                form.MinimumSize, form.MaximumSize);
+        }
+        protected override void OnMouseUp(MouseEventArgs e) { dragging = false; Capture = false; base.OnMouseUp(e); }
+        protected override void OnMouseCaptureChanged(EventArgs e) { if (!Capture) dragging = false; base.OnMouseCaptureChanged(e); }
     }
 
     internal sealed class BrandMark : Control
@@ -369,8 +447,18 @@ namespace DeltaResolveAccelerator
     internal sealed class MainForm : Form
     {
         internal float UiScale = 1f;
+        private float displayScale = 1f;
+        private bool layoutReady, resizingLayout;
+        private readonly List<DesignControl> designControls = new List<DesignControl>();
+        private readonly List<ResizeHandle> resizeHandles = new List<ResizeHandle>();
+        private List<Font> scaledFonts = new List<Font>();
+        private readonly List<string> resizeIssues = new List<string>();
+        private int resizeChecks;
+        private int ResizeGrip { get { return Math.Max(5, (int)Math.Round(6 * displayScale)); } }
         [DllImport("user32.dll")] private static extern bool ReleaseCapture();
         [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr handle, int message, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] private static extern int GetWindowLong(IntPtr handle, int index);
+        [DllImport("user32.dll")] private static extern bool PrintWindow(IntPtr handle, IntPtr hdc, uint flags);
         [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr handle, int attribute, ref int value, int size);
         internal const string TrialDeadline = "2026-11-13T00:00:00+11:00";
         private const int MaximumGamePaths = 2;
@@ -590,7 +678,7 @@ namespace DeltaResolveAccelerator
             float scale;
             using (Graphics graphics = CreateGraphics()) scale = graphics.DpiX / 96f;
             if (preview && previewScale >= .75f && previewScale <= 3f) scale = previewScale;
-            ApplyDisplayScale(scale);
+            InitializeDisplayScale(scale);
         }
 
         private static Label MakeLabel(string text, float size, bool bold, Color color)
@@ -621,10 +709,17 @@ namespace DeltaResolveAccelerator
             int width = dashboard.ClientSize.Width;
             if (width < 100) return;
             hero.Width = infoCard.Width = width;
+            hero.Height = Math.Max(Px(276), dashboard.ClientSize.Height - Px(212));
             int gap = Px(16), half = (width - gap) / 2;
-            resolverCard.Width = half; battleCard.SetBounds(half + gap, Px(292), width - half - gap, Px(108));
+            resolverCard.SetBounds(0, hero.Bottom + gap, half, Px(108));
+            battleCard.SetBounds(half + gap, hero.Bottom + gap, width - half - gap, Px(108));
+            infoCard.Top = resolverCard.Bottom + gap;
+            int extraHero = hero.Height - Px(276);
+            stateTitle.Top = Px(59) + extraHero / 2;
+            stateMessage.Top = Px(126) + extraHero / 2;
+            primary.Top = Px(204) + extraHero / 2; connectionDetail.Top = primary.Top + Px(10);
             copyError.Left = width - Px(137); infoText.Width = width - Px(copyError.Visible ? 180 : 48);
-            phasePill.Left = width - Px(186); art.Left = width - Px(271);
+            phasePill.Left = width - Px(186); art.Left = width - Px(271); art.Top = Px(48) + extraHero / 2;
         }
         private void LayoutSettings()
         {
@@ -642,34 +737,156 @@ namespace DeltaResolveAccelerator
             internal Control Control;
             internal Rectangle Bounds;
             internal Padding Padding;
-            internal Font Font;
+            internal string FontFamily;
+            internal float FontSize;
+            internal FontStyle FontStyle;
         }
         private static void CollectDesign(Control control, List<DesignControl> controls)
         {
-            controls.Add(new DesignControl { Control = control, Bounds = control.Bounds, Padding = control.Padding, Font = control.Font });
-            control.SuspendLayout();
+            controls.Add(new DesignControl { Control = control, Bounds = control.Bounds, Padding = control.Padding,
+                FontFamily = control.Font.FontFamily.Name, FontSize = control.Font.Size, FontStyle = control.Font.Style });
             foreach (Control child in control.Controls) CollectDesign(child, controls);
         }
-        private void ApplyDisplayScale(float scale)
+        private void InitializeDisplayScale(float scale)
         {
-            // Capture the finished logical layout once. Fonts and geometry both scale from
-            // these 96-DPI values, so no WinForms autoscale pass can double-scale one of them.
-            List<DesignControl> controls = new List<DesignControl>();
-            CollectDesign(this, controls); UiScale = scale;
-            foreach (DesignControl item in controls)
+            CollectDesign(this, designControls);
+            displayScale = scale;
+            foreach (int edgeId in new int[] { 10, 11, 12, 15, 13, 14, 16, 17 })
             {
-                Control control = item.Control;
-                if (control != this) control.Bounds = new Rectangle(Px(item.Bounds.X), Px(item.Bounds.Y), Px(item.Bounds.Width), Px(item.Bounds.Height));
-                control.Font = new Font(item.Font.FontFamily, item.Font.Size * scale, item.Font.Style, GraphicsUnit.Pixel);
-                control.Padding = new Padding(Px(item.Padding.Left), Px(item.Padding.Top), Px(item.Padding.Right), Px(item.Padding.Bottom));
+                ResizeHandle handle = new ResizeHandle(edgeId);
+                resizeHandles.Add(handle); Controls.Add(handle); handle.BringToFront();
             }
-            ClientSize = new Size(Px(860), Px(664));
-            for (int i = controls.Count - 1; i >= 0; i--) controls[i].Control.ResumeLayout(false);
-            PerformLayout();
-            foreach (DesignControl item in controls) item.Control.PerformLayout();
-            LayoutDashboard(); LayoutSettings();
-            MinimumSize = MaximumSize = Size;
-            UpdateWindowShape();
+            int edge = ResizeGrip * 2;
+            Size maximum = new Size((int)Math.Round(1280 * scale) + edge, (int)Math.Round(960 * scale) + edge);
+            if (!preview)
+            {
+                Size workArea = Screen.FromControl(this).WorkingArea.Size;
+                maximum = new Size(Math.Min(maximum.Width, workArea.Width), Math.Min(maximum.Height, workArea.Height));
+            }
+            MaximumSize = maximum;
+            MinimumSize = new Size(Math.Min((int)Math.Round(720 * scale) + edge, maximum.Width),
+                Math.Min((int)Math.Round(556 * scale) + edge, maximum.Height));
+            ClientSize = new Size(Math.Min((int)Math.Round(860 * scale) + edge, maximum.Width),
+                Math.Min((int)Math.Round(664 * scale) + edge, maximum.Height));
+            layoutReady = true;
+            LayoutForWindowSize();
+        }
+        protected override void OnClientSizeChanged(EventArgs e)
+        {
+            base.OnClientSizeChanged(e);
+            if (layoutReady && !resizingLayout && WindowState != FormWindowState.Minimized) LayoutForWindowSize();
+        }
+        private void LayoutForWindowSize()
+        {
+            if (resizingLayout || ClientSize.Width < 1 || ClientSize.Height < 1) return;
+            resizingLayout = true;
+            List<Font> newFonts = new List<Font>();
+            Dictionary<string, Font> fontCache = new Dictionary<string, Font>();
+            try
+            {
+                // Immutable logical rectangles/font sizes prevent cumulative shrink/growth.
+                UiScale = Math.Max(.1f, Math.Min((ClientSize.Width - ResizeGrip * 2) / 860f,
+                    (ClientSize.Height - ResizeGrip * 2) / 664f));
+                foreach (DesignControl item in designControls) item.Control.SuspendLayout();
+                foreach (DesignControl item in designControls)
+                {
+                    Control control = item.Control;
+                    if (control != this) control.Bounds = new Rectangle(Px(item.Bounds.X), Px(item.Bounds.Y), Px(item.Bounds.Width), Px(item.Bounds.Height));
+                    string key = item.FontFamily + "/" + item.FontSize.ToString(System.Globalization.CultureInfo.InvariantCulture) + "/" + item.FontStyle;
+                    Font font;
+                    if (!fontCache.TryGetValue(key, out font))
+                    {
+                        font = new Font(item.FontFamily, item.FontSize * UiScale, item.FontStyle, GraphicsUnit.Pixel);
+                        fontCache.Add(key, font); newFonts.Add(font);
+                    }
+                    control.Font = font;
+                    control.Padding = control == this ? new Padding(ResizeGrip) :
+                        new Padding(Px(item.Padding.Left), Px(item.Padding.Top), Px(item.Padding.Right), Px(item.Padding.Bottom));
+                }
+                for (int i = designControls.Count - 1; i >= 0; i--) designControls[i].Control.ResumeLayout(false);
+                PerformLayout();
+                foreach (DesignControl item in designControls) item.Control.PerformLayout();
+                LayoutDashboard(); LayoutSettings();
+                LayoutResizeHandles();
+                // WinForms can ignore a Font assignment when its value equals the old one.
+                // Only release objects no control actually references after all assignments.
+                List<Font> activeFonts = new List<Font>();
+                foreach (DesignControl item in designControls) activeFonts.Add(item.Control.Font);
+                newFonts.AddRange(scaledFonts);
+                scaledFonts = new List<Font>();
+                foreach (Font font in newFonts)
+                {
+                    bool inUse = activeFonts.Exists(delegate(Font active) { return Object.ReferenceEquals(active, font); });
+                    if (inUse) scaledFonts.Add(font); else font.Dispose();
+                }
+                Invalidate(true);
+            }
+            finally { resizingLayout = false; }
+        }
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams cp = base.CreateParams;
+                cp.Style &= ~(0x00c00000 | 0x00040000); // No caption, border or native thick frame.
+                return cp;
+            }
+        }
+        private void LayoutResizeHandles()
+        {
+            int g = ResizeGrip, w = ClientSize.Width, h = ClientSize.Height;
+            foreach (ResizeHandle handle in resizeHandles)
+            {
+                switch (handle.Edge)
+                {
+                    case 10: handle.SetBounds(0, g, g, Math.Max(1, h - 2 * g)); break;
+                    case 11: handle.SetBounds(w - g, g, g, Math.Max(1, h - 2 * g)); break;
+                    case 12: handle.SetBounds(g, 0, Math.Max(1, w - 2 * g), g); break;
+                    case 15: handle.SetBounds(g, h - g, Math.Max(1, w - 2 * g), g); break;
+                    case 13: handle.SetBounds(0, 0, g, g); break;
+                    case 14: handle.SetBounds(w - g, 0, g, g); break;
+                    case 16: handle.SetBounds(0, h - g, g, g); break;
+                    case 17: handle.SetBounds(w - g, h - g, g, g); break;
+                }
+            }
+        }
+        internal static Rectangle DragBounds(Rectangle original, int edge, int dx, int dy, Size minimum, Size maximum)
+        {
+            bool left = edge == 10 || edge == 13 || edge == 16;
+            bool right = edge == 11 || edge == 14 || edge == 17;
+            bool top = edge == 12 || edge == 13 || edge == 14;
+            bool bottom = edge == 15 || edge == 16 || edge == 17;
+            int width = Math.Max(minimum.Width, Math.Min(maximum.Width, original.Width + (left ? -dx : right ? dx : 0)));
+            int height = Math.Max(minimum.Height, Math.Min(maximum.Height, original.Height + (top ? -dy : bottom ? dy : 0)));
+            return new Rectangle(left ? original.Right - width : original.Left,
+                top ? original.Bottom - height : original.Top, width, height);
+        }
+        internal int ResizeHitTest(Point point)
+        {
+            int grip = ResizeGrip;
+            bool left = point.X >= 0 && point.X < grip;
+            bool right = point.X >= ClientSize.Width - grip && point.X < ClientSize.Width;
+            bool top = point.Y >= 0 && point.Y < grip;
+            bool bottom = point.Y >= ClientSize.Height - grip && point.Y < ClientSize.Height;
+            if (left && top) return 13; if (right && top) return 14;
+            if (left && bottom) return 16; if (right && bottom) return 17;
+            if (left) return 10; if (right) return 11;
+            if (top) return 12; if (bottom) return 15;
+            return 1;
+        }
+        protected override void WndProc(ref Message message)
+        {
+            // All window chrome is client-drawn; child grips provide resizing without a native frame.
+            if (message.Msg == 0x0083 || message.Msg == 0x0085) { message.Result = IntPtr.Zero; return; }
+            if (message.Msg == 0x0086) { message.Result = new IntPtr(1); return; }
+            if (message.Msg == 0x0084 && layoutReady && WindowState == FormWindowState.Normal)
+            {
+                long coordinates = message.LParam.ToInt64();
+                Point screen = new Point(unchecked((short)(coordinates & 0xffff)), unchecked((short)((coordinates >> 16) & 0xffff)));
+                int hit = ResizeHitTest(PointToClient(screen));
+                if (hit != 1) { message.Result = new IntPtr(hit); return; }
+            }
+            base.WndProc(ref message);
         }
         protected override void OnHandleCreated(EventArgs e)
         {
@@ -683,22 +900,122 @@ namespace DeltaResolveAccelerator
             catch (DllNotFoundException) { }
             catch (EntryPointNotFoundException) { }
         }
-        private void UpdateWindowShape()
+        internal void SetPreviewSize(string size)
         {
-            using (GraphicsPath path = Palette.Rounded(new RectangleF(0, 0, Width, Height), Px(20)))
+            if (!preview) throw new InvalidOperationException("Resize preview requires preview mode.");
+            if (size == "minimum") Size = MinimumSize;
+            else if (size == "maximum") Size = MaximumSize;
+            else if (size == "wide") Size = new Size(MaximumSize.Width, MinimumSize.Height);
+            else if (size == "tall") Size = new Size(MinimumSize.Width, MaximumSize.Height);
+            else
             {
-                Region previous = Region; Region = new Region(path);
-                if (previous != null) previous.Dispose();
+                string[] parts = size.Split('x');
+                if (parts.Length != 2) throw new ArgumentException("Expected WIDTHxHEIGHT or minimum/maximum/wide/tall.");
+                Size = new Size(Int32.Parse(parts[0]), Int32.Parse(parts[1]));
+            }
+        }
+        internal void VerifyRepeatedResize()
+        {
+            Size original = Size;
+            Dictionary<Control, Rectangle> bounds = new Dictionary<Control, Rectangle>();
+            Dictionary<Control, float> fonts = new Dictionary<Control, float>();
+            foreach (DesignControl item in designControls) { bounds[item.Control] = item.Control.Bounds; fonts[item.Control] = item.Control.Font.Size; }
+            for (int pass = 0; pass < 3; pass++)
+            {
+                foreach (string size in new string[] { "minimum", "wide", "tall", "maximum" })
+                {
+                    SetPreviewSize(size); Application.DoEvents();
+                    List<string> issues = new List<string>(); InspectLayout(this, issues, new List<object>());
+                    foreach (string issue in issues) resizeIssues.Add(size + ": " + issue);
+                    resizeChecks++;
+                }
+                Size = original; Application.DoEvents();
+                LayoutForWindowSize(); // Reassign equal-value fonts: WinForms can retain old objects.
+                using (Graphics graphics = CreateGraphics())
+                    foreach (DesignControl item in designControls) item.Control.Font.GetHeight(graphics);
+                foreach (DesignControl item in designControls)
+                    if (item.Control.Bounds != bounds[item.Control] || Math.Abs(item.Control.Font.Size - fonts[item.Control]) > .01f)
+                        resizeIssues.Add("Layout drift: " + item.Control.GetType().Name + " / " + item.Control.Text);
+                resizeChecks++;
+            }
+            if (scaledFonts.Count > designControls.Count) resizeIssues.Add("Owned font pool grew beyond active controls.");
+            if (Region != null) resizeIssues.Add("Native rounding must not use a clipped window Region.");
+            if (MinimumSize.Width >= MaximumSize.Width || MinimumSize.Height >= MaximumSize.Height) resizeIssues.Add("Window resizing remains locked.");
+            Point[] edges = { new Point(1, 1), new Point(Width / 2, 1), new Point(Width - 2, 1),
+                new Point(1, Height / 2), new Point(Width - 2, Height / 2),
+                new Point(1, Height - 2), new Point(Width / 2, Height - 2), new Point(Width - 2, Height - 2) };
+            int[] expected = { 13, 12, 14, 10, 11, 16, 15, 17 };
+            for (int i = 0; i < edges.Length; i++)
+            {
+                Point screen = PointToScreen(edges[i]);
+                IntPtr packed = new IntPtr(unchecked((screen.Y << 16) | (screen.X & 0xffff)));
+                if (SendMessage(Handle, 0x84, IntPtr.Zero, packed).ToInt32() != expected[i]) resizeIssues.Add("Resize edge hit-test failed: " + expected[i]);
+                ResizeHandle grip = resizeHandles.Find(delegate(ResizeHandle item) { return item.Visible && item.Bounds.Contains(edges[i]); });
+                if (grip == null || grip.Edge != expected[i]) resizeIssues.Add("Resize grip does not cover edge: " + expected[i]);
+                Rectangle origin = new Rectangle(100, 100, (MinimumSize.Width + MaximumSize.Width) / 2,
+                    (MinimumSize.Height + MaximumSize.Height) / 2);
+                foreach (int delta in new int[] { -10000, -30, 30, 10000 })
+                {
+                    Rectangle resized = DragBounds(origin, expected[i], delta, delta, MinimumSize, MaximumSize);
+                    if (resized.Width < MinimumSize.Width || resized.Width > MaximumSize.Width ||
+                        resized.Height < MinimumSize.Height || resized.Height > MaximumSize.Height)
+                        resizeIssues.Add("Resize grip exceeded limits: " + expected[i]);
+                    if ((expected[i] == 10 || expected[i] == 13 || expected[i] == 16) && resized.Right != origin.Right)
+                        resizeIssues.Add("Left grip lost opposite anchor.");
+                    if ((expected[i] == 12 || expected[i] == 13 || expected[i] == 14) && resized.Bottom != origin.Bottom)
+                        resizeIssues.Add("Top grip lost opposite anchor.");
+                }
+                resizeChecks++;
             }
         }
         internal string LayoutReport()
         {
             List<string> issues = new List<string>();
             List<object> labels = new List<object>();
+            List<object> grips = new List<object>();
+            foreach (ResizeHandle grip in resizeHandles) grips.Add(new { edge = grip.Edge, visible = grip.Visible,
+                x = grip.Left, y = grip.Top, width = grip.Width, height = grip.Height, handleCreated = grip.IsHandleCreated });
             InspectLayout(this, issues, labels);
+            issues.AddRange(resizeIssues);
+            int style = GetWindowLong(Handle, -16);
+            if ((style & (0x00c00000 | 0x00040000)) != 0) issues.Add("Native title bar/frame is present.");
             return new JavaScriptSerializer().Serialize(new {
                 scale = UiScale, width = Width, height = Height, state = state.Phase,
+                displayScale = displayScale, minimumWidth = MinimumSize.Width, minimumHeight = MinimumSize.Height,
+                maximumWidth = MaximumSize.Width, maximumHeight = MaximumSize.Height, resizeChecks = resizeChecks,
+                grips = grips, nativeCaption = (style & 0x00c00000) != 0, nativeThickFrame = (style & 0x00040000) != 0,
                 settings = settingsOpen, networkStarted = false, passed = issues.Count == 0, issues = issues, labels = labels });
+        }
+        internal void PaintNativePreview(Bitmap bitmap)
+        {
+            if (!preview) throw new InvalidOperationException("Native capture requires preview mode.");
+            SendMessage(Handle, 0x86, new IntPtr(1), IntPtr.Zero);
+            Invalidate(true); Update();
+            foreach (DesignControl item in designControls) { item.Control.Invalidate(); item.Control.Update(); }
+            Application.DoEvents();
+            using (Graphics graphics = Graphics.FromImage(bitmap))
+            {
+                graphics.Clear(Color.Magenta);
+                IntPtr dc = graphics.GetHdc();
+                bool painted;
+                try { painted = PrintWindow(Handle, dc, 0); }
+                finally { graphics.ReleaseHdc(dc); }
+                if (!painted) throw new InvalidOperationException("Native window painting failed.");
+            }
+            Point buttonLocation = PointToClient(primary.PointToScreen(Point.Empty));
+            Point headerSample = new Point(Width / 2, ResizeGrip + Px(8));
+            if (bitmap.GetPixel(headerSample.X, headerSample.Y).ToArgb() != Palette.Background.ToArgb())
+                resizeIssues.Add("Native header background differs from warm white.");
+            if (dashboard.Visible)
+            {
+                Point[] corners = { new Point(1, 1), new Point(primary.Width - 2, 1),
+                    new Point(1, primary.Height - 2), new Point(primary.Width - 2, primary.Height - 2) };
+                foreach (Point corner in corners)
+                {
+                    Color pixel = bitmap.GetPixel(buttonLocation.X + corner.X, buttonLocation.Y + corner.Y);
+                    if (pixel.R < 150 || pixel.G < 150 || pixel.B < 150) resizeIssues.Add("Native button corner was not painted with its parent background.");
+                }
+            }
         }
         private static void InspectLayout(Control parent, List<string> issues, List<object> labels)
         {
@@ -1239,6 +1556,7 @@ namespace DeltaResolveAccelerator
         {
             if (disposing) { timer.Dispose(); animationTimer.Dispose(); ClearImportedKey(); }
             base.Dispose(disposing);
+            if (disposing) { foreach (Font font in scaledFonts) font.Dispose(); scaledFonts.Clear(); }
         }
     }
 
