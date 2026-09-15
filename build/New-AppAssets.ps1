@@ -10,16 +10,28 @@ foreach ($size in $sizes) {
     $stream = [IO.MemoryStream]::new()
     try {
         $graphics.SmoothingMode = [Drawing.Drawing2D.SmoothingMode]::AntiAlias
-        $graphics.Clear([Drawing.Color]::FromArgb(15,24,38))
+        $graphics.Clear([Drawing.Color]::Transparent)
+        $background = [Drawing.Drawing2D.GraphicsPath]::new()
+        $backgroundBrush = [Drawing.SolidBrush]::new([Drawing.Color]::FromArgb(229,241,224))
+        try {
+            $diameter = [single](($size-1)*.42)
+            $edge = [single]($size-1-$diameter)
+            $background.AddArc([single]0,[single]0,$diameter,$diameter,[single]180,[single]90)
+            $background.AddArc($edge,[single]0,$diameter,$diameter,[single]270,[single]90)
+            $background.AddArc($edge,$edge,$diameter,$diameter,[single]0,[single]90)
+            $background.AddArc([single]0,$edge,$diameter,$diameter,[single]90,[single]90)
+            $background.CloseFigure()
+            $graphics.FillPath($backgroundBrush,$background)
+        } finally { $backgroundBrush.Dispose(); $background.Dispose() }
         $points = [Drawing.PointF[]]@(
             [Drawing.PointF]::new($size*.50,$size*.16),
             [Drawing.PointF]::new($size*.85,$size*.79),
             [Drawing.PointF]::new($size*.15,$size*.79))
-        $pen = [Drawing.Pen]::new([Drawing.Color]::FromArgb(74,225,189),[single]($size*.075))
+        $pen = [Drawing.Pen]::new([Drawing.Color]::FromArgb(46,105,76),[single]($size*.075))
         $pen.LineJoin = [Drawing.Drawing2D.LineJoin]::Round
         $graphics.DrawPolygon($pen,$points)
         $pen.Dispose()
-        $brush = [Drawing.SolidBrush]::new([Drawing.Color]::FromArgb(230,244,242))
+        $brush = [Drawing.SolidBrush]::new([Drawing.Color]::FromArgb(46,105,76))
         $graphics.FillEllipse($brush,[single]($size*.445),[single]($size*.535),[single]($size*.11),[single]($size*.11))
         $brush.Dispose()
         $bitmap.Save($stream,[Drawing.Imaging.ImageFormat]::Png)

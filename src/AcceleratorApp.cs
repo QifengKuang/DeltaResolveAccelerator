@@ -8,6 +8,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
@@ -30,17 +31,20 @@ namespace DeltaResolveAccelerator
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             string previewPath = null, previewState = "stopped", selfTestPath = null;
+            float previewScale = 0;
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "--preview" && i + 1 < args.Length) previewPath = args[++i];
                 else if (args[i] == "--preview-state" && i + 1 < args.Length) previewState = args[++i];
                 else if (args[i] == "--self-test" && i + 1 < args.Length) selfTestPath = args[++i];
+                else if (args[i] == "--preview-scale" && i + 1 < args.Length)
+                    previewScale = Single.Parse(args[++i], System.Globalization.CultureInfo.InvariantCulture);
             }
             if (selfTestPath != null) { Environment.ExitCode = OfflineTests.Run(selfTestPath); return; }
             if (previewPath != null)
             {
                 // Preview deliberately bypasses mutex, settings, credentials and backend.
-                using (MainForm form = new MainForm(true, previewState))
+                using (MainForm form = new MainForm(true, previewState, previewScale))
                 {
                     form.ShowInTaskbar = false;
                     form.StartPosition = FormStartPosition.Manual;
@@ -55,6 +59,7 @@ namespace DeltaResolveAccelerator
                         form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, form.Size));
                         bitmap.Save(absolute, ImageFormat.Png);
                     }
+                    File.WriteAllText(absolute + ".layout.json", form.LayoutReport(), Encoding.UTF8);
                     form.Close();
                 }
                 return;
@@ -81,19 +86,28 @@ namespace DeltaResolveAccelerator
 
     internal static class Palette
     {
-        internal static readonly Color Background = Color.FromArgb(9, 16, 29);
-        internal static readonly Color Card = Color.FromArgb(16, 28, 44);
-        internal static readonly Color Raised = Color.FromArgb(21, 36, 53);
-        internal static readonly Color Border = Color.FromArgb(39, 58, 75);
-        internal static readonly Color Text = Color.FromArgb(232, 242, 247);
-        internal static readonly Color Muted = Color.FromArgb(144, 165, 180);
-        internal static readonly Color Teal = Color.FromArgb(62, 221, 190);
-        internal static readonly Color DarkTeal = Color.FromArgb(10, 45, 45);
-        internal static readonly Color Error = Color.FromArgb(255, 152, 133);
-        internal static readonly Color Amber = Color.FromArgb(239, 197, 115);
+        internal static readonly Color Background = Color.FromArgb(247, 249, 246);
+        internal static readonly Color Card = Color.FromArgb(255, 255, 253);
+        internal static readonly Color Raised = Color.FromArgb(237, 242, 236);
+        internal static readonly Color Border = Color.FromArgb(223, 232, 222);
+        internal static readonly Color Text = Color.FromArgb(33, 54, 43);
+        internal static readonly Color Muted = Color.FromArgb(104, 122, 110);
+        internal static readonly Color Teal = Color.FromArgb(46, 105, 76);
+        internal static readonly Color Mint = Color.FromArgb(229, 241, 224);
+        internal static readonly Color DarkTeal = Color.FromArgb(35, 82, 61);
+        internal static readonly Color Error = Color.FromArgb(170, 64, 53);
+        internal static readonly Color Amber = Color.FromArgb(140, 103, 37);
         internal static Font Font(float size, bool bold)
         {
-            return new Font("Microsoft YaHei UI", size, bold ? FontStyle.Bold : FontStyle.Regular);
+            // Pixel fonts and bounds use the same explicit scale; point fonts otherwise grow
+            // independently of late-created controls on a high-DPI Windows desktop.
+            return new Font("Microsoft YaHei UI", size * 96f / 72f,
+                bold ? FontStyle.Bold : FontStyle.Regular, GraphicsUnit.Pixel);
+        }
+        internal static float Scale(Control control)
+        {
+            MainForm form = control.FindForm() as MainForm;
+            return form == null ? 1f : form.UiScale;
         }
         internal static GraphicsPath Rounded(RectangleF rect, float radius)
         {
@@ -112,7 +126,9 @@ namespace DeltaResolveAccelerator
     {
         internal Color Fill = Palette.Card;
         internal Color Stroke = Palette.Border;
-        internal int Radius = 18;
+        internal int Radius = 22;
+        internal bool Outline;
+        internal Color GradientEnd = Color.Empty;
         internal Surface()
         {
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
@@ -122,10 +138,12 @@ namespace DeltaResolveAccelerator
         protected override void OnPaint(PaintEventArgs e)
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            using (GraphicsPath path = Palette.Rounded(new RectangleF(.5f, .5f, Width - 1, Height - 1), Radius))
-            using (Brush brush = new SolidBrush(Fill))
+            float scale = Palette.Scale(this);
+            using (GraphicsPath path = Palette.Rounded(new RectangleF(.5f, .5f, Width - 1, Height - 1), Radius * scale))
+            using (Brush brush = GradientEnd.IsEmpty ? (Brush)new SolidBrush(Fill) :
+                new LinearGradientBrush(ClientRectangle, Fill, GradientEnd, 18f))
             using (Pen pen = new Pen(Stroke))
-            { e.Graphics.FillPath(brush, path); e.Graphics.DrawPath(pen, path); }
+            { e.Graphics.FillPath(brush, path); if (Outline) e.Graphics.DrawPath(pen, path); }
             base.OnPaint(e);
         }
     }
@@ -143,7 +161,8 @@ namespace DeltaResolveAccelerator
             Font = Palette.Font(10.5f, true);
             Cursor = Cursors.Hand;
             TabStop = true;
-            BackColor = Palette.Card;
+            SetStyle(ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Color.Transparent;
         }
         protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
         protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
@@ -152,13 +171,12 @@ namespace DeltaResolveAccelerator
         {
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             Color fill = Primary ? Palette.Teal : Palette.Raised;
-            if (!Enabled) fill = Color.FromArgb(36, 58, 66);
-            else if (hover) fill = Primary ? Color.FromArgb(101, 239, 213) : Color.FromArgb(32, 51, 69);
-            using (GraphicsPath path = Palette.Rounded(new RectangleF(.5f, .5f, Width - 1, Height - 1), 11))
+            if (!Enabled) fill = Color.FromArgb(220, 230, 219);
+            else if (hover) fill = Primary ? Palette.DarkTeal : Color.FromArgb(222, 232, 220);
+            using (GraphicsPath path = Palette.Rounded(new RectangleF(.5f, .5f, Width - 1, Height - 1), 13 * Palette.Scale(this)))
             using (Brush brush = new SolidBrush(fill))
-            using (Pen pen = new Pen(Primary ? fill : Palette.Border))
-            { e.Graphics.FillPath(brush, path); e.Graphics.DrawPath(pen, path); }
-            Color text = Primary && Enabled ? Color.FromArgb(5, 35, 33) : (Enabled ? Palette.Text : Palette.Muted);
+            { e.Graphics.FillPath(brush, path); }
+            Color text = Primary && Enabled ? Palette.Card : (Enabled ? Palette.Text : Palette.Muted);
             TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, text,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             if (Focused && ShowFocusCues)
@@ -166,6 +184,57 @@ namespace DeltaResolveAccelerator
                 Rectangle focus = ClientRectangle; focus.Inflate(-5, -5);
                 ControlPaint.DrawFocusRectangle(e.Graphics, focus, text, fill);
             }
+        }
+    }
+
+    // Standard window actions remain keyboard-accessible without the native white title bar.
+    internal sealed class WindowButton : Button
+    {
+        internal bool CloseAction;
+        private bool hover;
+        internal WindowButton()
+        {
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint |
+                ControlStyles.OptimizedDoubleBuffer, true);
+            FlatStyle = FlatStyle.Flat; FlatAppearance.BorderSize = 0;
+            BackColor = Palette.Background; Cursor = Cursors.Hand;
+        }
+        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            e.Graphics.Clear(hover ? (CloseAction ? Color.FromArgb(248, 229, 222) : Palette.Raised) : BackColor);
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            float s = Palette.Scale(this), x = Width / 2f, y = Height / 2f;
+            using (Pen pen = new Pen(CloseAction && hover ? Palette.Error : Palette.Muted, 1.35f * s))
+            {
+                e.Graphics.DrawLine(pen, x - 4 * s, CloseAction ? y - 4 * s : y, x + 4 * s, CloseAction ? y + 4 * s : y);
+                if (CloseAction) e.Graphics.DrawLine(pen, x - 4 * s, y + 4 * s, x + 4 * s, y - 4 * s);
+            }
+            if (Focused && ShowFocusCues) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(ClientRectangle, -6, -6));
+        }
+    }
+
+    internal sealed class BrandMark : Control
+    {
+        internal BrandMark()
+        {
+            SetStyle(ControlStyles.SupportsTransparentBackColor | ControlStyles.UserPaint |
+                ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+            BackColor = Color.Transparent; TabStop = false;
+        }
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.ScaleTransform(Width / 48f, Height / 48f);
+            using (GraphicsPath tile = Palette.Rounded(new RectangleF(0, 0, 48, 48), 13))
+            using (Brush fill = new SolidBrush(Palette.Mint)) g.FillPath(fill, tile);
+            using (Pen pen = new Pen(Palette.Teal, 2.5f))
+            {
+                pen.LineJoin = LineJoin.Round;
+                g.DrawPolygon(pen, new PointF[] { new PointF(24, 10), new PointF(38, 35), new PointF(10, 35) });
+            }
+            using (Brush dot = new SolidBrush(Palette.Teal)) g.FillEllipse(dot, 22.5f, 25, 3, 3);
         }
     }
 
@@ -183,39 +252,37 @@ namespace DeltaResolveAccelerator
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
-            float cx = Width * .53f, cy = Height * .47f;
-            Color accent = Connected || Waiting ? Palette.Teal : Color.FromArgb(75, 116, 135);
-            using (Pen ring = new Pen(Color.FromArgb(30, 71, 85), 1))
+            GraphicsState saved = g.Save();
+            // All illustration geometry shares one coordinate space, including at high DPI.
+            g.ScaleTransform(Width / 244f, Height / 226f);
+            float cx = 122, cy = 108;
+            using (Brush halo = new SolidBrush(Color.FromArgb(45, 255, 255, 253)))
+                g.FillEllipse(halo, 13, 0, 218, 218);
+            using (Pen ring = new Pen(Color.FromArgb(92, 181, 201, 174), 1))
             {
-                for (int i = 0; i < 3; i++)
-                {
-                    float r = 35 + i * 26;
-                    g.DrawEllipse(ring, cx - r, cy - r, r * 2, r * 2);
-                }
+                g.DrawEllipse(ring, cx - 100, cy - 100, 200, 200);
+                g.DrawEllipse(ring, cx - 79, cy - 79, 158, 158);
             }
-            PointF a = new PointF(cx - 71, cy + 35), b = new PointF(cx + 50, cy - 48);
-            PointF c = new PointF(cx + 79, cy + 42);
-            using (Pen route = new Pen(Color.FromArgb(75, accent), 2))
+            using (Brush shadow = new SolidBrush(Color.FromArgb(18, 68, 102, 66)))
+                g.FillEllipse(shadow, cx - 59, cy - 55, 118, 118);
+            using (Brush disc = new LinearGradientBrush(new RectangleF(cx - 58, cy - 58, 116, 116),
+                Color.FromArgb(254, 255, 250), Color.FromArgb(237, 247, 230), 65f))
+                g.FillEllipse(disc, cx - 58, cy - 58, 116, 116);
+            using (Pen symbol = new Pen(Palette.Teal, 4))
             {
-                route.DashStyle = DashStyle.Dash;
-                g.DrawLine(route, a, b);
+                symbol.StartCap = symbol.EndCap = LineCap.Round; symbol.LineJoin = LineJoin.Round;
+                g.DrawLines(symbol, new PointF[] { new PointF(cx - 22, cy + 14), new PointF(cx, cy - 25),
+                    new PointF(cx + 22, cy + 14), new PointF(cx - 22, cy + 14) });
             }
-            using (Pen route = new Pen(accent, 2)) g.DrawLine(route, a, c);
+            using (Brush dot = new SolidBrush(Palette.Teal)) g.FillEllipse(dot, cx - 3, cy + 1, 6, 6);
             if (Waiting)
             {
-                using (Pen spinner = new Pen(accent, 3))
-                    g.DrawArc(spinner, cx - 17, cy - 17, 34, 34, AnimationPhase * 360, 245);
-                DrawNode(g, new PointF(a.X + (b.X - a.X) * AnimationPhase,
-                    a.Y + (b.Y - a.Y) * AnimationPhase), accent, 4);
+                using (Pen spinner = new Pen(Palette.Teal, 2.5f))
+                { spinner.StartCap = spinner.EndCap = LineCap.Round; g.DrawArc(spinner, cx - 79, cy - 79, 158, 158, AnimationPhase * 360, 82); }
             }
-            DrawNode(g, a, accent, 6); DrawNode(g, b, accent, 6); DrawNode(g, c, accent, 6);
-            using (Font font = Palette.Font(8.5f, false))
-            using (Brush muted = new SolidBrush(Palette.Muted))
-            {
-                g.DrawString("本机", font, muted, a.X - 14, a.Y + 17);
-                g.DrawString("香港解析", font, muted, b.X - 26, b.Y - 27);
-                g.DrawString("对局", font, muted, c.X - 13, c.Y + 17);
-            }
+            DrawNode(g, new PointF(202, 48), Connected ? Palette.Teal : Color.FromArgb(139, 171, 130), 4);
+            DrawNode(g, new PointF(52, 175), Color.FromArgb(139, 171, 130), 3);
+            g.Restore(saved);
         }
         private static void DrawNode(Graphics g, PointF point, Color color, float radius)
         {
@@ -301,6 +368,10 @@ namespace DeltaResolveAccelerator
 
     internal sealed class MainForm : Form
     {
+        internal float UiScale = 1f;
+        [DllImport("user32.dll")] private static extern bool ReleaseCapture();
+        [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr handle, int message, IntPtr wParam, IntPtr lParam);
+        [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr handle, int attribute, ref int value, int size);
         internal const string TrialDeadline = "2026-11-13T00:00:00+11:00";
         private const int MaximumGamePaths = 2;
         private const string GamePathLimitMessage = "最多保留两个不同的游戏程序路径（Steam 和 WeGame）。请先移除要替换的路径。";
@@ -353,8 +424,10 @@ namespace DeltaResolveAccelerator
         private bool initialStatusPending;
         private byte[] importedKey;
 
-        internal MainForm(bool previewMode, string previewState)
+        internal MainForm(bool previewMode, string previewState) : this(previewMode, previewState, 0) { }
+        internal MainForm(bool previewMode, string previewState, float previewScale)
         {
+            SuspendLayout();
             preview = previewMode;
             root = AppDomain.CurrentDomain.BaseDirectory;
             settingsPath = Path.Combine(root, "user-settings.json");
@@ -364,104 +437,117 @@ namespace DeltaResolveAccelerator
             BackColor = Palette.Background;
             ForeColor = Palette.Text;
             Font = Palette.Font(10, false);
-            AutoScaleDimensions = new SizeF(96, 96);
-            AutoScaleMode = AutoScaleMode.Dpi;
-            ClientSize = new Size(840, 640);
-            MinimumSize = new Size(790, 645);
+            AutoScaleMode = AutoScaleMode.None;
+            ClientSize = new Size(860, 664);
             StartPosition = FormStartPosition.CenterScreen;
-            FormBorderStyle = FormBorderStyle.FixedSingle;
+            FormBorderStyle = FormBorderStyle.None;
             MaximizeBox = false;
             DoubleBuffered = true;
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
-            shell.Dock = DockStyle.Fill; shell.Padding = new Padding(28, 23, 28, 18);
+            shell.Dock = DockStyle.Fill; shell.Padding = new Padding(28, 8, 28, 20);
             shell.BackColor = Palette.Background; Controls.Add(shell);
 
-            Panel header = new Panel { Dock = DockStyle.Top, Height = 82, BackColor = Palette.Background };
-            PictureBox brandIcon = new PictureBox { BackColor = Palette.Background, SizeMode = PictureBoxSizeMode.Zoom, TabStop = false };
-            brandIcon.SetBounds(0, 10, 40, 40);
-            if (Icon != null) brandIcon.Image = Icon.ToBitmap();
-            brandIcon.Disposed += delegate { if (brandIcon.Image != null) brandIcon.Image.Dispose(); };
+            Panel chrome = new Panel { Dock = DockStyle.Top, Height = 36, BackColor = Palette.Background };
+            Label chromeTitle = MakeLabel("DELTA  /  私人加速器", 7.5f, false, Palette.Muted);
+            chromeTitle.SetBounds(29, 6, 270, 24);
+            MouseEventHandler drag = delegate(object sender, MouseEventArgs e)
+            {
+                if (e.Button == MouseButtons.Left) { ReleaseCapture(); SendMessage(Handle, 0xA1, new IntPtr(2), IntPtr.Zero); }
+            };
+            chrome.MouseDown += drag; chromeTitle.MouseDown += drag; chrome.Controls.Add(chromeTitle);
+            WindowButton closeButton = new WindowButton { CloseAction = true, AccessibleName = "关闭窗口", TabIndex = 9 };
+            WindowButton minimizeButton = new WindowButton { AccessibleName = "最小化", TabIndex = 8 };
+            closeButton.SetBounds(812, 2, 40, 32); minimizeButton.SetBounds(772, 2, 40, 32);
+            closeButton.Anchor = minimizeButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            closeButton.Click += delegate { Close(); }; minimizeButton.Click += delegate { WindowState = FormWindowState.Minimized; };
+            chrome.Controls.Add(closeButton); chrome.Controls.Add(minimizeButton); Controls.Add(chrome);
+            chrome.Resize += delegate { closeButton.Left = chrome.ClientSize.Width - Px(48); minimizeButton.Left = chrome.ClientSize.Width - Px(88); };
+
+            Panel header = new Panel { Dock = DockStyle.Top, Height = 86, BackColor = Palette.Background };
+            BrandMark brandIcon = new BrandMark();
+            brandIcon.SetBounds(0, 10, 48, 48);
             header.Controls.Add(brandIcon);
-            headline = MakeLabel("三角洲 · 主入口优化", 19, true, Palette.Text);
-            headline.SetBounds(56, 0, 480, 36); header.Controls.Add(headline);
-            Label sub = MakeLabel("PRIVATE ACCESS  /  私人解析加速器", 8.5f, false, Palette.Muted);
-            sub.SetBounds(57, 40, 480, 22); header.Controls.Add(sub);
-            settingsButton.Text = "设置"; settingsButton.SetBounds(692, 3, 90, 36);
+            headline = MakeLabel("三角洲", 22, true, Palette.Text);
+            headline.SetBounds(64, 0, 480, 46); header.Controls.Add(headline);
+            Label sub = MakeLabel("主入口优化  ·  让连接轻一点", 9, false, Palette.Muted);
+            sub.SetBounds(65, 47, 480, 24); header.Controls.Add(sub);
+            settingsButton.Text = "设置"; settingsButton.SetBounds(712, 13, 92, 38);
             settingsButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             settingsButton.Click += delegate { if (!busy && state.Phase == "stopped") OpenSettings(); };
             header.Controls.Add(settingsButton);
-            header.Resize += delegate { settingsButton.Left = header.ClientSize.Width - settingsButton.Width - 2; };
-            Panel bottom = new Panel { Dock = DockStyle.Bottom, Height = 32, BackColor = Palette.Background };
-            footer = MakeLabel("试用至 2026-11-13   ·   每台设备使用独立密钥", 8.5f, false, Palette.Muted);
-            footer.Dock = DockStyle.Fill; footer.TextAlign = ContentAlignment.BottomLeft; bottom.Controls.Add(footer);
+            header.Resize += delegate { settingsButton.Left = header.ClientSize.Width - settingsButton.Width; };
+            Panel bottom = new Panel { Dock = DockStyle.Bottom, Height = 26, BackColor = Palette.Background };
+            footer = MakeLabel("私人专线   /   试用至 2026-11-13   ·   独立设备密钥", 8, false, Palette.Muted);
+            footer.Dock = DockStyle.Fill; footer.TextAlign = ContentAlignment.BottomCenter; bottom.Controls.Add(footer);
             Panel body = new Panel { Dock = DockStyle.Fill, BackColor = Palette.Background };
             shell.Controls.Add(body); shell.Controls.Add(bottom); shell.Controls.Add(header);
             dashboard.Dock = DockStyle.Fill; settings.Dock = DockStyle.Fill;
             dashboard.BackColor = settings.BackColor = Palette.Background;
             body.Controls.Add(dashboard); body.Controls.Add(settings);
 
-            hero.SetBounds(0, 0, 784, 266); hero.Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right;
+            hero.SetBounds(0, 0, 804, 276); hero.Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right;
+            hero.Fill = Palette.Mint; hero.GradientEnd = Color.FromArgb(240, 246, 230); hero.Radius = 26;
             dashboard.Controls.Add(hero);
-            Label eyebrow = MakeLabel("当前连接", 9, false, Palette.Muted);
-            eyebrow.SetBounds(25, 21, 250, 23); hero.Controls.Add(eyebrow);
+            Label eyebrow = MakeLabel("连接状态", 9, false, Palette.Muted);
+            eyebrow.SetBounds(28, 23, 250, 26); hero.Controls.Add(eyebrow);
             phasePill = MakeLabel("待机", 9, true, Palette.Muted);
-            phasePill.SetBounds(604, 22, 150, 24); phasePill.TextAlign = ContentAlignment.MiddleRight;
+            phasePill.SetBounds(618, 24, 158, 26); phasePill.TextAlign = ContentAlignment.MiddleRight;
             phasePill.Anchor = AnchorStyles.Top | AnchorStyles.Right; hero.Controls.Add(phasePill);
-            stateTitle = MakeLabel("尚未开启", 28, true, Palette.Text);
-            stateTitle.SetBounds(23, 55, 465, 56); hero.Controls.Add(stateTitle);
+            stateTitle = MakeLabel("准备就绪", 28, true, Palette.Text);
+            stateTitle.SetBounds(26, 59, 470, 64); hero.Controls.Add(stateTitle);
             stateMessage = MakeLabel("开启后，主入口解析经香港，对局流量保持直连。", 10, false, Palette.Muted);
-            stateMessage.SetBounds(26, 119, 480, 44); hero.Controls.Add(stateMessage);
+            stateMessage.SetBounds(29, 126, 472, 58); hero.Controls.Add(stateMessage);
             primary.Primary = true; primary.Text = "开启加速";
-            primary.SetBounds(26, 188, 245, 52);
+            primary.SetBounds(28, 204, 206, 48);
             primary.Click += async delegate { await ToggleAsync(); }; hero.Controls.Add(primary);
             connectionDetail = MakeLabel("只优化入口解析", 9, false, Palette.Muted);
-            connectionDetail.SetBounds(290, 199, 225, 28); hero.Controls.Add(connectionDetail);
-            art.SetBounds(511, 50, 236, 186); art.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            connectionDetail.SetBounds(252, 214, 225, 28); hero.Controls.Add(connectionDetail);
+            art.SetBounds(533, 48, 244, 226); art.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             hero.Controls.Add(art); art.SendToBack();
 
-            resolverCard.SetBounds(0, 282, 384, 92); battleCard.SetBounds(400, 282, 384, 92);
+            resolverCard.SetBounds(0, 292, 394, 108); battleCard.SetBounds(410, 292, 394, 108);
             dashboard.Controls.Add(resolverCard); dashboard.Controls.Add(battleCard);
-            AddRouteCard(resolverCard, "入口解析", "香港中转", "仅处理入口解析请求", Palette.Teal);
+            AddRouteCard(resolverCard, "入口解析", "香港中转", "仅优化指定入口解析", Palette.Teal);
             AddRouteCard(battleCard, "对局流量", "本机直连", "实际延迟以游戏内显示为准", Palette.Text);
-            infoCard.SetBounds(0, 390, 784, 86); infoCard.Fill = Color.FromArgb(12, 23, 37);
+            infoCard.SetBounds(0, 416, 804, 72); infoCard.Fill = Palette.Raised; infoCard.Radius = 18;
             dashboard.Controls.Add(infoCard);
-            infoText = MakeLabel("准备好后开启加速，再启动游戏。\r\n加速器会保持运行，关闭窗口时会先安全停止。", 9.5f, false, Palette.Muted);
-            infoText.SetBounds(22, 16, 610, 57); infoCard.Controls.Add(infoText);
-            copyError.Text = "复制错误"; copyError.SetBounds(643, 24, 117, 36);
+            infoText = MakeLabel("准备好后开启加速，再启动游戏。\r\n加速器会保持运行，关闭窗口时会先安全停止。", 9, false, Palette.Muted);
+            infoText.SetBounds(24, 12, 630, 48); infoText.AutoEllipsis = true; infoCard.Controls.Add(infoText);
+            copyError.Text = "复制错误"; copyError.SetBounds(667, 18, 113, 36);
             copyError.Click += delegate { CopyError(); }; infoCard.Controls.Add(copyError);
 
             setupCard.Dock = DockStyle.Fill; settings.Controls.Add(setupCard);
             Label setupTitle = MakeLabel("先完成设备设置", 22, true, Palette.Text);
-            setupTitle.SetBounds(27, 24, 620, 42); setupCard.Controls.Add(setupTitle);
+            setupTitle.SetBounds(27, 18, 620, 48); setupCard.Controls.Add(setupTitle);
             Label setupIntro = MakeLabel("选择游戏程序，填入分配给这台电脑的独立设备密钥。", 10, false, Palette.Muted);
-            setupIntro.SetBounds(29, 76, 710, 28); setupCard.Controls.Add(setupIntro);
+            setupIntro.SetBounds(29, 72, 710, 28); setupCard.Controls.Add(setupIntro);
             Label gameLabel = MakeLabel("游戏程序（每行一个，最多两个：Steam / WeGame）", 10, true, Palette.Text);
-            gameLabel.SetBounds(29, 124, 500, 26); setupCard.Controls.Add(gameLabel);
-            AddTextField(setupCard, gamePathBox, 29, 153, 575, 80, false);
+            gameLabel.SetBounds(29, 114, 660, 28); setupCard.Controls.Add(gameLabel);
+            AddTextField(setupCard, gamePathBox, 29, 146, 575, 76, false);
             gamePathBox.Multiline = true; gamePathBox.WordWrap = false;
-            gamePathBox.ScrollBars = ScrollBars.Horizontal; gamePathBox.Height = 60;
+            gamePathBox.ScrollBars = ScrollBars.Horizontal; gamePathBox.Height = 56;
             gamePathBox.Font = Palette.Font(8.5f, false); gamePathBox.MaxLength = 16384;
-            browseButton.Text = "选择程序"; browseButton.SetBounds(620, 157, 130, 40);
+            browseButton.Text = "选择程序"; browseButton.SetBounds(640, 148, 135, 40);
             browseButton.Click += delegate { BrowseGame(); }; setupCard.Controls.Add(browseButton);
             Label exeHint = MakeLabel("Steam / WeGame 按实际运行的进程自动匹配；选择程序可追加路径。\r\n每行选择一个 DeltaForceClient-Win64-Shipping.exe。", 8.5f, false, Palette.Muted);
-            exeHint.SetBounds(31, 238, 704, 34); setupCard.Controls.Add(exeHint);
+            exeHint.SetBounds(29, 228, 740, 40); setupCard.Controls.Add(exeHint);
             Label keyLabel = MakeLabel("独立设备密钥", 10, true, Palette.Text);
-            keyLabel.SetBounds(29, 273, 500, 26); setupCard.Controls.Add(keyLabel);
+            keyLabel.SetBounds(29, 274, 500, 28); setupCard.Controls.Add(keyLabel);
             importKeyButton.Text = "导入已有密钥";
-            importKeyButton.SetBounds(590, 268, 160, 31);
+            importKeyButton.SetBounds(615, 272, 160, 32);
             importKeyButton.Font = Palette.Font(8.5f, false);
             importKeyButton.Click += delegate { ImportKey(); };
             setupCard.Controls.Add(importKeyButton);
-            AddTextField(setupCard, keyBox, 29, 304, 721, 40, true);
+            AddTextField(setupCard, keyBox, 29, 311, 746, 42, true);
             keyHint = MakeLabel("每台电脑一份密钥，请勿与朋友共用。密钥仅加密保存在本机。", 8.5f, false, Palette.Muted);
-            keyHint.SetBounds(31, 351, 704, 28); setupCard.Controls.Add(keyHint);
+            keyHint.SetBounds(29, 361, 740, 26); setupCard.Controls.Add(keyHint);
             keyBox.TextChanged += delegate { if (keyBox.TextLength > 0) ClearImportedKey(); };
             settingsError = MakeLabel("", 9, false, Palette.Error);
-            settingsError.SetBounds(30, 384, 715, 35); setupCard.Controls.Add(settingsError);
+            settingsError.SetBounds(29, 389, 746, 33); settingsError.AutoEllipsis = true; setupCard.Controls.Add(settingsError);
             saveButton.Primary = true; saveButton.Text = "保存设置";
-            saveButton.SetBounds(29, 429, 220, 46); saveButton.Click += delegate { SaveSettings(); };
+            saveButton.SetBounds(29, 430, 206, 42); saveButton.Click += delegate { SaveSettings(); };
             setupCard.Controls.Add(saveButton);
-            cancelSettings.Text = "返回"; cancelSettings.SetBounds(264, 429, 105, 46);
+            cancelSettings.Text = "返回"; cancelSettings.SetBounds(250, 430, 105, 42);
             cancelSettings.Click += delegate { ClearImportedKey(); keyBox.Clear(); settingsOpen = false; ShowCurrentView(); }; setupCard.Controls.Add(cancelSettings);
 
             dashboard.Resize += delegate { LayoutDashboard(); };
@@ -485,7 +571,8 @@ namespace DeltaResolveAccelerator
                 gamePathBox.Text = configuredGamePaths[0];
                 string requested = (previewState ?? "stopped").ToLowerInvariant();
                 settingsOpen = requested == "setup" || requested == "settings";
-                state.Phase = requested == "connected" ? "connected" : requested == "error" ? "error" : requested == "starting" ? "starting" : "stopped";
+                state.Phase = requested == "connected" ? "connected" : requested == "error" ? "error" : requested == "starting" ? "starting" : requested == "stopping" ? "stopping" : "stopped";
+                initialStatusPending = requested == "checking";
                 state.Ready = state.Phase == "connected";
                 state.Message = state.Phase == "error" ? "暂时无法连接香港解析服务。请检查网络后重试。" : "";
                 if (state.Phase == "starting")
@@ -493,29 +580,35 @@ namespace DeltaResolveAccelerator
                     state.ProgressStage = "正在等待香港解析服务就绪";
                     state.OperationStartedAt = DateTimeOffset.Now.AddSeconds(-12);
                 }
-                if (settingsOpen) { configured = false; gamePathBox.Text = ""; }
+                if (settingsOpen) { configured = requested == "settings"; gamePathBox.Text = ""; }
                 errorText = state.Message;
-                sub.Text = "界面预览 · 模拟状态 · 未连接服务";
+                footer.Text = "界面预览 · 模拟状态 · 未连接服务   /   试用至 2026-11-13";
             }
             else { LoadSettings(); initialStatusPending = true; }
             ApplyState();
+            ResumeLayout(false); PerformLayout(); LayoutDashboard(); LayoutSettings();
+            float scale;
+            using (Graphics graphics = CreateGraphics()) scale = graphics.DpiX / 96f;
+            if (preview && previewScale >= .75f && previewScale <= 3f) scale = previewScale;
+            ApplyDisplayScale(scale);
         }
 
         private static Label MakeLabel(string text, float size, bool bold, Color color)
         {
             return new Label { Text = text, Font = Palette.Font(size, bold), ForeColor = color,
-                BackColor = Color.Transparent, AutoSize = false, UseMnemonic = false };
+                BackColor = Color.Transparent, AutoSize = false, UseMnemonic = false,
+                TextAlign = ContentAlignment.MiddleLeft };
         }
         private static void AddRouteCard(Surface parent, string heading, string value, string note, Color accent)
         {
-            Label name = MakeLabel(heading, 9, false, Palette.Muted); name.SetBounds(21, 16, 85, 22);
-            Label title = MakeLabel(value, 14, true, accent); title.SetBounds(112, 11, 238, 32);
-            Label hint = MakeLabel(note, 8.5f, false, Palette.Muted); hint.SetBounds(21, 54, 344, 24);
+            Label name = MakeLabel(heading, 8.5f, false, Palette.Muted); name.SetBounds(24, 13, 335, 23);
+            Label title = MakeLabel(value, 17, true, accent); title.SetBounds(22, 37, 337, 36);
+            Label hint = MakeLabel(note, 8.5f, false, Palette.Muted); hint.SetBounds(24, 76, 340, 22);
             parent.Controls.Add(name); parent.Controls.Add(title); parent.Controls.Add(hint);
         }
         private static void AddTextField(Control parent, TextBox box, int x, int y, int width, int height, bool secret)
         {
-            Surface field = new Surface { Fill = Palette.Background, Radius = 9 };
+            Surface field = new Surface { Fill = Palette.Background, Radius = 10, Outline = true };
             field.SetBounds(x, y, width, height);
             box.BorderStyle = BorderStyle.None; box.BackColor = Palette.Background; box.ForeColor = Palette.Text;
             box.Font = Palette.Font(10, false); box.SetBounds(12, 10, width - 24, 23);
@@ -529,20 +622,109 @@ namespace DeltaResolveAccelerator
             if (width < 100) return;
             hero.Width = infoCard.Width = width;
             int gap = Px(16), half = (width - gap) / 2;
-            resolverCard.Width = half; battleCard.SetBounds(half + gap, Px(282), width - half - gap, Px(92));
-            copyError.Left = width - Px(141); infoText.Width = width - Px(copyError.Visible ? 185 : 44);
-            phasePill.Left = width - Px(176); art.Left = width - Px(273);
+            resolverCard.Width = half; battleCard.SetBounds(half + gap, Px(292), width - half - gap, Px(108));
+            copyError.Left = width - Px(137); infoText.Width = width - Px(copyError.Visible ? 180 : 48);
+            phasePill.Left = width - Px(186); art.Left = width - Px(271);
         }
         private void LayoutSettings()
         {
             int width = setupCard.ClientSize.Width;
             if (width < 300) return;
             gamePathBox.Parent.Width = width - Px(209); browseButton.Left = width - Px(164);
-            keyBox.Parent.Width = width - Px(63);
-            importKeyButton.Left = width - Px(194);
-            settingsError.Width = width - Px(60);
+            keyBox.Parent.Width = width - Px(58);
+            importKeyButton.Left = width - Px(189);
+            settingsError.Width = width - Px(58);
         }
-        private int Px(int designPixels) { return (int)Math.Round(designPixels * DeviceDpi / 96.0); }
+        private int Px(int designPixels) { return (int)Math.Round(designPixels * UiScale); }
+
+        private sealed class DesignControl
+        {
+            internal Control Control;
+            internal Rectangle Bounds;
+            internal Padding Padding;
+            internal Font Font;
+        }
+        private static void CollectDesign(Control control, List<DesignControl> controls)
+        {
+            controls.Add(new DesignControl { Control = control, Bounds = control.Bounds, Padding = control.Padding, Font = control.Font });
+            control.SuspendLayout();
+            foreach (Control child in control.Controls) CollectDesign(child, controls);
+        }
+        private void ApplyDisplayScale(float scale)
+        {
+            // Capture the finished logical layout once. Fonts and geometry both scale from
+            // these 96-DPI values, so no WinForms autoscale pass can double-scale one of them.
+            List<DesignControl> controls = new List<DesignControl>();
+            CollectDesign(this, controls); UiScale = scale;
+            foreach (DesignControl item in controls)
+            {
+                Control control = item.Control;
+                if (control != this) control.Bounds = new Rectangle(Px(item.Bounds.X), Px(item.Bounds.Y), Px(item.Bounds.Width), Px(item.Bounds.Height));
+                control.Font = new Font(item.Font.FontFamily, item.Font.Size * scale, item.Font.Style, GraphicsUnit.Pixel);
+                control.Padding = new Padding(Px(item.Padding.Left), Px(item.Padding.Top), Px(item.Padding.Right), Px(item.Padding.Bottom));
+            }
+            ClientSize = new Size(Px(860), Px(664));
+            for (int i = controls.Count - 1; i >= 0; i--) controls[i].Control.ResumeLayout(false);
+            PerformLayout();
+            foreach (DesignControl item in controls) item.Control.PerformLayout();
+            LayoutDashboard(); LayoutSettings();
+            MinimumSize = MaximumSize = Size;
+            UpdateWindowShape();
+        }
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            try
+            {
+                int rounded = 2, noBorder = unchecked((int)0xFFFFFFFE);
+                DwmSetWindowAttribute(Handle, 33, ref rounded, 4);
+                DwmSetWindowAttribute(Handle, 34, ref noBorder, 4);
+            }
+            catch (DllNotFoundException) { }
+            catch (EntryPointNotFoundException) { }
+        }
+        private void UpdateWindowShape()
+        {
+            using (GraphicsPath path = Palette.Rounded(new RectangleF(0, 0, Width, Height), Px(20)))
+            {
+                Region previous = Region; Region = new Region(path);
+                if (previous != null) previous.Dispose();
+            }
+        }
+        internal string LayoutReport()
+        {
+            List<string> issues = new List<string>();
+            List<object> labels = new List<object>();
+            InspectLayout(this, issues, labels);
+            return new JavaScriptSerializer().Serialize(new {
+                scale = UiScale, width = Width, height = Height, state = state.Phase,
+                settings = settingsOpen, networkStarted = false, passed = issues.Count == 0, issues = issues, labels = labels });
+        }
+        private static void InspectLayout(Control parent, List<string> issues, List<object> labels)
+        {
+            foreach (Control child in parent.Controls)
+            {
+                if (!child.Visible) continue;
+                if (child.Left < -1 || child.Top < -1 || child.Right > parent.ClientSize.Width + 1 || child.Bottom > parent.ClientSize.Height + 1)
+                    issues.Add("Control outside parent: " + child.GetType().Name + " / " + child.Text);
+                Label label = child as Label;
+                if (label != null && label.Text.Length > 0)
+                {
+                    Size needed = TextRenderer.MeasureText(label.Text, label.Font, new Size(label.Width, Int32.MaxValue),
+                        TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+                    bool fits = needed.Height <= label.Height && needed.Width <= label.Width;
+                    if (!fits && !label.AutoEllipsis) issues.Add("Text clipping: " + label.Text);
+                    labels.Add(new { text = label.Text, width = label.Width, height = label.Height,
+                        neededWidth = needed.Width, neededHeight = needed.Height, fits = fits, ellipsis = label.AutoEllipsis });
+                }
+                if (child is Button && child.Text.Length > 0)
+                {
+                    Size needed = TextRenderer.MeasureText(child.Text, child.Font);
+                    if (needed.Width > child.Width - 8 || needed.Height > child.Height - 4) issues.Add("Button text clipping: " + child.Text);
+                }
+                InspectLayout(child, issues, labels);
+            }
+        }
         private bool IsExpired()
         {
             return DateTimeOffset.Now >= DateTimeOffset.Parse(TrialDeadline, System.Globalization.CultureInfo.InvariantCulture);
@@ -551,7 +733,7 @@ namespace DeltaResolveAccelerator
         {
             settings.Visible = settingsOpen; dashboard.Visible = !settingsOpen;
             if (settingsOpen) settings.BringToFront(); else dashboard.BringToFront();
-            settingsButton.Text = settingsOpen ? "设备设置" : "设置";
+            settingsButton.Text = "设置";
         }
         private void ApplyState()
         {
@@ -574,7 +756,7 @@ namespace DeltaResolveAccelerator
                 state.Phase == "starting" ? "正在建立解析连接，请稍候。" :
                 state.Phase == "stopping" ? "正在恢复连接设置，请稍候。" :
                 state.Phase == "error" ? "请查看下方提示，处理后再试。" :
-                "开启后，主入口解析经香港，对局流量保持直连。";
+                "通过香港优化主入口解析，\r\n游戏对局保持本机直连。";
             connectionDetail.Text = active ? "解析通道运行中" : "只优化入口解析";
             primary.Text = state.Phase == "starting" ? "正在开启…" : state.Phase == "stopping" ? "正在关闭…" :
                 active ? "关闭加速" : state.Phase == "error" ? "关闭并恢复" : configured ? "开启加速" : "完成设备设置";

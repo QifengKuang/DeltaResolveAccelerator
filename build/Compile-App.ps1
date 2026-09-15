@@ -9,7 +9,9 @@ $out = if ($PreviewBuild) { Join-Path $root 'build/AcceleratorPreview.exe' } els
 $argsList = @('/nologo','/target:winexe','/platform:x64','/optimize+','/codepage:65001',('/out:'+$out),('/win32icon:'+(Join-Path $root 'src/app.ico')),
     '/reference:System.dll','/reference:System.Core.dll','/reference:System.Drawing.dll','/reference:System.Windows.Forms.dll',
     '/reference:System.Web.Extensions.dll','/reference:System.Security.dll')
-if (-not $PreviewBuild) { $argsList += '/win32manifest:'+(Join-Path $root 'src/app.manifest') }
+# Keep preview and production DPI behavior identical while previews remain unelevated.
+$manifest = if ($PreviewBuild) { 'src/preview.manifest' } else { 'src/app.manifest' }
+$argsList += '/win32manifest:'+(Join-Path $root $manifest)
 $argsList += Join-Path $root 'src/AcceleratorApp.cs'
 $argsList += Join-Path $root 'src/AssemblyInfo.cs'
 & $compiler @argsList
