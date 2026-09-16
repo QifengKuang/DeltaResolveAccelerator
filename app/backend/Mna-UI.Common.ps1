@@ -1,5 +1,42 @@
-# Shared local runtime helpers copied from the reviewed trial script; no execution on import.
-$script:MnaUiRoot = $PSScriptRoot
+# Shared runtime helpers. Resolve MSIX aliases to one physical installation root.
+function Resolve-MnaUiDirectoryPath {
+    param([Parameter(Mandatory)][string]$Path)
+    if (-not ('MnaUi.DirectoryPathIdentity' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Text;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+namespace MnaUi {
+    public static class DirectoryPathIdentity {
+        [DllImport("kernel32.dll", EntryPoint="CreateFileW", CharSet=CharSet.Unicode, SetLastError=true)]
+        private static extern SafeFileHandle Open(string path,uint access,uint share,IntPtr security,uint disposition,uint flags,IntPtr template);
+        [DllImport("kernel32.dll", EntryPoint="GetFinalPathNameByHandleW", CharSet=CharSet.Unicode, SetLastError=true)]
+        private static extern uint FinalPath(SafeFileHandle handle,StringBuilder path,uint size,uint flags);
+        public static string Resolve(string path) {
+            using(var handle=Open(path,0,7,IntPtr.Zero,3,0x02000000,IntPtr.Zero)) {
+                if(handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+                var buffer=new StringBuilder(32768);
+                uint length=FinalPath(handle,buffer,(uint)buffer.Capacity,0);
+                if(length==0 || length>=buffer.Capacity) throw new Win32Exception(Marshal.GetLastWin32Error());
+                string result=buffer.ToString();
+                if(result.StartsWith(@"\\?\UNC\",StringComparison.OrdinalIgnoreCase)) return @"\\"+result.Substring(8);
+                if(result.StartsWith(@"\\?\",StringComparison.Ordinal)) return result.Substring(4);
+                return result;
+            }
+        }
+    }
+}
+'@ -ErrorAction Stop | Out-Null
+    }
+    return [MnaUi.DirectoryPathIdentity]::Resolve([IO.Path]::GetFullPath($Path)).TrimEnd('\','/')
+}
+# MSIX can redirect individual files while leaving their parent directory
+# handle unredirected. Anchor siblings to this actual script file, not its
+# logical directory, so one session never mixes the desktop and cache copies.
+$script:MnaUiRoot = Split-Path (Resolve-MnaUiDirectoryPath -Path $PSCommandPath) -Parent
+. (Join-Path $script:MnaUiRoot 'Mna-SessionState.ps1')
 $script:MnaUiOwnershipSaved = @{}
 
 function Protect-MnaTrialMessage {
@@ -434,7 +471,7 @@ function Write-MnaUiStatus {
             gameRoutingVerified=($GameRoutingVerified -and $GameRoutingConfigured -and $UdpRoutingVerified -and $Phase -eq 'connected')
             routingMode=$RoutingMode
             progressStage=$stage;operationStartedAt=$operationTime
-            runId=$effectiveRunId;updatedAt=Get-Date -Format o
+            runId=$effectiveRunId;updatedAt=Get-Date -Format o;BootIdentity=Get-MnaUiBootIdentity
         })
     } finally { if ($statusLock) { $statusLock.Dispose() } }
 }
@@ -445,7 +482,7 @@ function Assert-MnaUiPreviousRunClear {
     if ($Record -and $Record.RunId -match '^[a-f0-9]{24}$') {
         $owner=Read-MnaUiJson (Get-MnaRunFile $Record.RunId ownership)
         if ($owner) {
-            if ($owner.RunId -ne $Record.RunId -or -not [string]::Equals($owner.Runtime,(Get-MnaUiPaths).Runtime,[StringComparison]::OrdinalIgnoreCase)) {
+            if ($owner.RunId -ne $Record.RunId -or -not (Test-MnaUiSamePath $owner.Runtime (Get-MnaUiPaths).Runtime)) {
                 throw '上次连接的归属记录无法确认，已保留记录；请先点击关闭'
             }
             foreach ($item in @($owner.Owned)) {
@@ -455,12 +492,12 @@ function Assert-MnaUiPreviousRunClear {
                 }
             }
             $previousStatus=Read-MnaUiJson (Get-MnaUiPaths).Status
-            if (-not $previousStatus -or $previousStatus.phase -ne 'stopped') {
+            if (-not $Record.RetiredPreviousBoot -and (-not $previousStatus -or $previousStatus.runId -ne $Record.RunId -or $previousStatus.phase -ne 'stopped')) {
                 throw '上次连接的清理结果尚未确认，已保留记录；请先点击关闭再重试'
             }
         }
     }
-    if (Get-Process -Name linkboost,linkboost-core,multipath-helper,mp-speeder -ErrorAction SilentlyContinue) {
+    if (Get-MnaUiRuntimeProcesses) {
         throw '已有 SDK 进程运行，未覆盖上次恢复记录；请先结束已有连接'
     }
 }
@@ -506,9 +543,10 @@ namespace MnaUi {
             }
             $imagePath=[MnaUi.LimitedProcessImageQuery]::Read([uint32]$Record.WorkerPid)
         }
-        return -not [string]::IsNullOrEmpty($imagePath) -and [string]::Equals($imagePath,$Record.WorkerExecutable,[StringComparison]::OrdinalIgnoreCase) -and
+        return -not [string]::IsNullOrEmpty($imagePath) -and (Test-MnaUiSamePath $imagePath $Record.WorkerExecutable) -and
+            (Test-MnaUiSamePath $imagePath (Get-MnaUiPaths).PowerShell) -and
             $process.StartTime.ToUniversalTime().Ticks -eq ([datetime]$Record.WorkerCreatedUtc).ToUniversalTime().Ticks -and
-            [string]::Equals($Record.WorkerScript,(Get-MnaUiPaths).WorkerScript,[StringComparison]::OrdinalIgnoreCase)
+            (Test-MnaUiSamePath $Record.WorkerScript (Get-MnaUiPaths).WorkerScript)
     } catch { return $false }
 }
 
@@ -516,21 +554,38 @@ function Get-MnaUiStatus {
     $paths=Get-MnaUiPaths
     $status=Read-MnaUiJson $paths.Status
     $record=Read-MnaUiJson $paths.WorkerRecord
-    if (-not $status) { return [pscustomobject]@{phase='stopped';message='加速器已关闭';ready=$false;gateway=$null;exitIp=$null;gameRoutingConfigured=$false;udpRoutingVerified=$false;gameRoutingVerified=$false;routingMode='ResolveOnly';progressStage=$null;operationStartedAt=$null} }
-    $routingMode='ResolveOnly'
-    if ($status.phase -in @('starting','connected','stopping') -and -not (Test-MnaUiWorker $record)) {
-        return [pscustomobject]@{phase='error';message='后台进程已退出；请点击关闭以核对并清理本次连接';ready=$false;gateway=$null;exitIp=$null;gameRoutingConfigured=$false;udpRoutingVerified=$false;gameRoutingVerified=$false;routingMode=$routingMode;progressStage=$null;operationStartedAt=$null}
+    $owner=if($record -and $record.RunId -match '^[a-f0-9]{24}$'){Read-MnaUiJson (Get-MnaRunFile $record.RunId ownership)}else{$null}
+    $state=Get-MnaUiSessionDisposition -Record $record -Owner $owner -Status $status
+    $currentRecoveryError=$false
+    if($state.Kind -eq 'previousBoot' -and $status -and $status.runId -eq $record.RunId -and $status.phase -eq 'error' -and $status.BootIdentity) {
+        try {
+            $boot=([datetime](Get-MnaUiBootIdentity)).ToUniversalTime()
+            $currentRecoveryError=([datetime]$status.BootIdentity).ToUniversalTime() -eq $boot -and ([datetime]$status.updatedAt).ToUniversalTime() -ge $boot
+        } catch {}
     }
+    $phase=switch($state.Kind){
+        {$_ -in @('empty','stopped','previousBoot')} {'stopped'}
+        'pendingStart' {'starting'}
+        'live' {
+            if($status -and $status.runId -eq $record.RunId -and $status.phase -in @('starting','connected','stopping','error','stopped')) {
+                if($status.phase -eq 'connected' -and -not $state.Ready){'starting'}else{$status.phase}
+            } else {'starting'}
+        }
+        default {'error'}
+    }
+    $message=if($state.Kind -eq 'recoveryRequired' -and $status -and $status.runId -eq $record.RunId -and $status.phase -eq 'error'){$status.message}else{$state.Reason}
+    if($currentRecoveryError){$phase='error';$message=$status.message}
+    $showProgress=$state.Kind -in @('live','pendingStart') -and $status -and
+        $status.runId -eq $record.RunId -and $phase -in @('starting','stopping') -and $status.phase -eq $phase
     [pscustomobject]@{
-        phase=$status.phase;message=(Protect-MnaTrialMessage $status.message)
-        ready=($status.phase -eq 'connected' -and $status.ready -eq $true -and $status.gameRoutingConfigured -eq $true -and $status.udpRoutingVerified -eq $true)
-        gateway=(Protect-MnaTrialMessage $status.gateway);exitIp=$status.exitIp
-        gameRoutingConfigured=($status.phase -eq 'connected' -and $status.gameRoutingConfigured -eq $true)
-        udpRoutingVerified=($status.phase -eq 'connected' -and $status.udpRoutingVerified -eq $true)
-        gameRoutingVerified=($status.phase -eq 'connected' -and $status.gameRoutingVerified -eq $true)
-        routingMode=$routingMode
-        progressStage=if ($status.phase -in @('starting','stopping')) {Protect-MnaTrialMessage $status.progressStage} else {$null}
-        operationStartedAt=if ($status.phase -in @('starting','stopping')) {ConvertTo-MnaUiOperationTime $status.operationStartedAt} else {$null}
+        phase=$phase;message=(Protect-MnaTrialMessage $message);ready=$state.Ready
+        gateway=$(if($state.Ready){Protect-MnaTrialMessage $status.gateway}else{$null});exitIp=$(if($state.Ready){$status.exitIp}else{$null})
+        gameRoutingConfigured=($state.Ready -and $status.gameRoutingConfigured -eq $true)
+        udpRoutingVerified=($state.Ready -and $status.udpRoutingVerified -eq $true)
+        gameRoutingVerified=($state.Ready -and $status.gameRoutingVerified -eq $true)
+        routingMode='ResolveOnly';runId=$record.RunId;updatedAt=$status.updatedAt;sessionKind=$state.Kind
+        progressStage=if($showProgress){Protect-MnaTrialMessage $status.progressStage}else{$null}
+        operationStartedAt=if($showProgress){ConvertTo-MnaUiOperationTime $status.operationStartedAt}else{$null}
     }
 }
 
@@ -545,7 +600,7 @@ function Save-MnaUiOwnership {
     $path = Get-MnaRunFile $RunId ownership
     $record = [pscustomobject]@{
         RunId=$RunId;RootPid=$trialProcess.Id;RootCreated=$trialStartTime.ToString('o')
-        Runtime=$trialRuntimeDirectory;BeforePath=$uiBeforePath;Owned=@($trialOwned.Values | Sort-Object Pid)
+        Runtime=$trialRuntimeDirectory;BeforePath=$uiBeforePath;Owned=@($trialOwned.Values | Sort-Object Pid);BootIdentity=Get-MnaUiBootIdentity
     }
     $serialized = ConvertTo-Json -InputObject $record -Depth 16 -Compress
     # Stable process ownership does not need rewriting on every health check.
