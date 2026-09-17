@@ -338,7 +338,12 @@ function Write-MnaUiJson {
         while ($true) {
             try {
                 if ($operation -eq '写入') {
-                    [IO.File]::WriteAllText($temporary,$json,[Text.UTF8Encoding]::new($false))
+                    # Flush the complete temporary file before publishing its name.
+                    # Atomic replacement alone does not protect cached bytes on power loss.
+                    $bytes=[Text.UTF8Encoding]::new($false).GetBytes($json)
+                    $stream=[IO.FileStream]::new($temporary,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough)
+                    try { $stream.Write($bytes,0,$bytes.Length);$stream.Flush($true) }
+                    finally { $stream.Dispose() }
                     $operation = '替换'
                 }
                 # Never delete/truncate the destination: readers see complete old or new JSON.
@@ -634,14 +639,99 @@ function Test-MnaFreeTrialExpired {
     return $At -ge $deadlineInstant
 }
 
+function Get-MnaUiDisconnectedDhcpChanges {
+    param([object]$Comparison,[object]$BaselineState,[object]$CurrentState)
+    # A diff alone cannot prove that an address expired on an unused adapter.
+    # Require the two complete snapshots and bind the supplied diff to them.
+    if (-not $BaselineState -or -not $CurrentState -or -not $Comparison.FullyComparable) { return $null }
+    foreach ($state in @($BaselineState,$CurrentState)) {
+        if ($state.SchemaVersion -ne 1 -or $state.Complete -ne $true -or @($state.ReadErrors).Count -ne 0 -or -not $state.Data) { return $null }
+        foreach ($section in @('Adapters','Interfaces','IPAddresses','ActiveRoutes','PersistentRoutes','DNS','WinINETProxy','WinHTTPProxy','RelatedProcesses','RelatedServices','RelatedDrivers')) {
+            if ($section -notin @($state.Data.PSObject.Properties.Name)) { return $null }
+        }
+    }
+    $actual=Compare-TrialNetworkState -BaselineState $BaselineState -CurrentState $CurrentState
+    if (-not $actual.FullyComparable -or
+        (ConvertTo-Json -InputObject @($actual.Changes) -Depth 12 -Compress) -cne
+        (ConvertTo-Json -InputObject @($Comparison.Changes) -Depth 12 -Compress)) { return $null }
+    $allowed=@{RemovedAddresses=@();AddedAddresses=@();RemovedRoutes=@();AddedRoutes=@()}
+    $parseIpv4={
+        param($Text)
+        $address=$null
+        if ([Net.IPAddress]::TryParse([string]$Text,[ref]$address) -and
+            $address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and
+            $address.ToString() -ceq [string]$Text) { return $address }
+        return $null
+    }
+    $routePrefixes={
+        param($Address)
+        $ip=& $parseIpv4 $Address.IPAddress
+        $bytes=$ip.GetAddressBytes()
+        $number=[uint64]$bytes[0]*16777216+[uint64]$bytes[1]*65536+[uint64]$bytes[2]*256+[uint64]$bytes[3]
+        $hostMask=[uint64]([math]::Pow(2,32-[int]$Address.PrefixLength)-1)
+        $network=$number -band ([uint64]4294967295 -bxor $hostMask)
+        $broadcast=$network -bor $hostMask
+        $format={param([uint64]$Value) '{0}.{1}.{2}.{3}' -f (($Value -shr 24) -band 255),(($Value -shr 16) -band 255),(($Value -shr 8) -band 255),($Value -band 255)}
+        @(((& $format $network)+'/'+$Address.PrefixLength),($Address.IPAddress+'/32'),((& $format $broadcast)+'/32'))
+    }
+    foreach ($beforeAdapter in @($BaselineState.Data.Adapters)) {
+        if ($beforeAdapter.HardwareInterface -ne $true -or $beforeAdapter.Virtual -ne $false -or $beforeAdapter.Status -ne 'Disconnected') { continue }
+        $index=$beforeAdapter.ifIndex
+        if (@($BaselineState.Data.Adapters | Where-Object ifIndex -eq $index).Count -ne 1) { continue }
+        $afterAdapters=@($CurrentState.Data.Adapters | Where-Object ifIndex -eq $index)
+        if ($afterAdapters.Count -ne 1) { continue }
+        $afterAdapter=$afterAdapters[0]
+        if ($afterAdapter.HardwareInterface -ne $true -or $afterAdapter.Virtual -ne $false -or $afterAdapter.Status -ne 'Disconnected' -or
+            ($beforeAdapter | Select-Object -Property * -ExcludeProperty LinkSpeed | ConvertTo-Json -Compress) -cne
+            ($afterAdapter | Select-Object -Property * -ExcludeProperty LinkSpeed | ConvertTo-Json -Compress)) { continue }
+        $beforeInterfaces=@($BaselineState.Data.Interfaces | Where-Object { $_.InterfaceIndex -eq $index -and $_.AddressFamily -eq 'IPv4' })
+        $afterInterfaces=@($CurrentState.Data.Interfaces | Where-Object { $_.InterfaceIndex -eq $index -and $_.AddressFamily -eq 'IPv4' })
+        if ($beforeInterfaces.Count -ne 1 -or $afterInterfaces.Count -ne 1) { continue }
+        $beforeInterface=$beforeInterfaces[0];$afterInterface=$afterInterfaces[0]
+        if ($beforeInterface.Dhcp -ne 1 -or $afterInterface.Dhcp -ne 1 -or $beforeInterface.ConnectionState -ne 0 -or $afterInterface.ConnectionState -ne 0 -or
+            $beforeInterface.InterfaceAlias -cne $beforeAdapter.Name -or $afterInterface.InterfaceAlias -cne $afterAdapter.Name -or
+            ($beforeInterface | ConvertTo-Json -Compress) -cne ($afterInterface | ConvertTo-Json -Compress)) { continue }
+        $removed=@($Comparison.Changes | Where-Object Section -eq 'IPAddresses' | ForEach-Object Removed | Where-Object { $_.InterfaceIndex -eq $index -and $_.AddressFamily -eq 'IPv4' })
+        $added=@($Comparison.Changes | Where-Object Section -eq 'IPAddresses' | ForEach-Object Added | Where-Object { $_.InterfaceIndex -eq $index -and $_.AddressFamily -eq 'IPv4' })
+        # Only the observed DHCP -> APIPA fallback is recognized. Renewals,
+        # static edits and connected-interface changes retain the normal checks.
+        if ($removed.Count -ne 1 -or $added.Count -ne 1) { continue }
+        $dhcp=$removed[0];$apipa=$added[0]
+        $oldIp=& $parseIpv4 $dhcp.IPAddress;$newIp=& $parseIpv4 $apipa.IPAddress
+        if (-not $oldIp -or -not $newIp -or $oldIp.Equals($newIp)) { continue }
+        $oldBytes=$oldIp.GetAddressBytes();$newBytes=$newIp.GetAddressBytes()
+        if ($dhcp.PrefixOrigin -ne 3 -or $dhcp.SuffixOrigin -ne 3 -or $dhcp.PrefixLength -lt 1 -or $dhcp.PrefixLength -gt 30 -or
+            $dhcp.Type -ne 1 -or $dhcp.SkipAsSource -ne $false -or $dhcp.AddressState -notin @(3,4) -or $dhcp.InterfaceAlias -cne $beforeAdapter.Name -or
+            $oldBytes[0] -lt 1 -or $oldBytes[0] -ge 224 -or $oldBytes[0] -eq 127 -or ($oldBytes[0] -eq 169 -and $oldBytes[1] -eq 254)) { continue }
+        if ($apipa.PrefixOrigin -ne 2 -or $apipa.SuffixOrigin -ne 4 -or $apipa.PrefixLength -ne 16 -or
+            $apipa.Type -ne 1 -or $apipa.SkipAsSource -ne $false -or $apipa.AddressState -notin @(1,3,4) -or $apipa.InterfaceAlias -cne $afterAdapter.Name -or
+            $newBytes[0] -ne 169 -or $newBytes[1] -ne 254 -or $newBytes[2] -in @(0,255)) { continue }
+        $allowed.RemovedAddresses+=($dhcp | ConvertTo-Json -Depth 6 -Compress)
+        $allowed.AddedAddresses+=($apipa | ConvertTo-Json -Depth 6 -Compress)
+        foreach ($side in @('Removed','Added')) {
+            $address=if ($side -eq 'Removed') {$dhcp} else {$apipa}
+            $prefixes=@(& $routePrefixes $address)
+            foreach ($route in @($Comparison.Changes | Where-Object Section -eq 'ActiveRoutes' | ForEach-Object { $_.$side })) {
+                if ($route.InterfaceIndex -eq $index -and $route.InterfaceAlias -ceq $address.InterfaceAlias -and $route.AddressFamily -eq 'IPv4' -and
+                    $route.Protocol -eq 2 -and $route.NextHop -ceq '0.0.0.0' -and $route.RouteMetric -eq 256 -and $route.Publish -eq 0 -and
+                    $route.DestinationPrefix -cin $prefixes) {
+                    $allowed[$side+'Routes']+=($route | ConvertTo-Json -Depth 6 -Compress)
+                }
+            }
+        }
+    }
+    return $allowed
+}
+
 function Test-MnaUiConfigurationRestored {
-    param([Parameter(Mandatory)][object]$Comparison)
+    param([Parameter(Mandatory)][object]$Comparison,[object]$BaselineState,[object]$CurrentState)
     if (-not $Comparison.FullyComparable) { return $false }
     if ($Comparison.Equal) { return $true }
     $physicalIndexes=@()
     if (@($Comparison.Changes | Where-Object Section -in @('IPAddresses','ActiveRoutes')).Count) {
         $physicalIndexes=@(Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object HardwareInterface | ForEach-Object ifIndex)
     }
+    $disconnectedDhcp=Get-MnaUiDisconnectedDhcpChanges -Comparison $Comparison -BaselineState $BaselineState -CurrentState $CurrentState
     $parseIpv6={
         param($Text)
         $address=$null
@@ -687,7 +777,8 @@ function Test-MnaUiConfigurationRestored {
                 foreach ($side in @('Removed','Added')) {
                     $normalized[$side] = @($change.$side | ForEach-Object {
                         $physical = $_.InterfaceIndex -in $physicalIndexes
-                        if ((& $addressIdentity $_) -notin $dynamicKeys[$side]) {
+                        $fallback=$physical -and $disconnectedDhcp -and ($_ | ConvertTo-Json -Depth 6 -Compress) -cin $disconnectedDhcp[$side+'Addresses']
+                        if (-not $fallback -and (& $addressIdentity $_) -notin $dynamicKeys[$side]) {
                             if ($physical) { $_ | Select-Object -Property * -ExcludeProperty AddressState | ConvertTo-Json -Depth 6 -Compress }
                             else { $_ | ConvertTo-Json -Depth 6 -Compress }
                         }
@@ -699,6 +790,8 @@ function Test-MnaUiConfigurationRestored {
             }
             foreach ($side in @('Removed','Added')) {
                 foreach ($item in @($change.$side)) {
+                    if ($item.InterfaceIndex -in $physicalIndexes -and $disconnectedDhcp -and
+                        ($item | ConvertTo-Json -Depth 6 -Compress) -cin $disconnectedDhcp[$side+'Routes']) { continue }
                     # Protocol=3 is NetMgmt, not proof of RA origin. Even a
                     # matching /64 can be manual; preserve it for review.
                     if ($item.InterfaceIndex -notin $physicalIndexes -or $item.AddressFamily -ne 'IPv6' -or $item.Protocol -ne 2 -or $item.Publish -ne 0 -or $item.RouteMetric -ne 256) { return $false }

@@ -204,7 +204,11 @@ function Save-TrialNetworkState {
     New-Item -ItemType Directory -Path $script:MnaTrialNetworkResults -Force -ErrorAction Stop | Out-Null
     $name = '{0}_{1}_{2}.json' -f $Label,(Get-Date -Format 'yyyyMMdd_HHmmss_fff'),([guid]::NewGuid().ToString('N').Substring(0,8))
     $path = Join-Path $script:MnaTrialNetworkResults $name
-    $State | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath $path -Encoding utf8 -ErrorAction Stop
+    # A baseline must reach disk before a process can change networking.
+    $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($State | ConvertTo-Json -Depth 14))
+    $stream=[IO.FileStream]::new($path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read,4096,[IO.FileOptions]::WriteThrough)
+    try { $stream.Write($bytes,0,$bytes.Length);$stream.Flush($true) }
+    finally { $stream.Dispose() }
     return $path
 }
 

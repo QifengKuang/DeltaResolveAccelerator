@@ -28,7 +28,7 @@ function Get-NetRoute { throw '离线验证不读取或修改路由' }
 function New-NetRoute { throw '离线验证禁止修改路由' }
 function Set-DnsClientServerAddress { throw '离线验证禁止修改 DNS' }
 
-$expected=@('Control-Accelerator.ps1','Run-Accelerator.ps1','Mna-UI.Common.ps1','Mna-GameRoute.ps1','Trial-NetworkState.ps1','Test-UdpStun.ps1','Check-Configuration.ps1')
+$expected=@('Control-Accelerator.ps1','Run-Accelerator.ps1','Mna-UI.Common.ps1','Mna-GameRoute.ps1','Mna-RebootRecovery.ps1','Mna-SessionRecovery.ps1','Trial-NetworkState.ps1','Test-UdpStun.ps1','Check-Configuration.ps1')
 foreach ($name in $expected) {
     $path=Join-Path $backend $name
     $tokens=$null;$parseErrors=$null
@@ -136,6 +136,138 @@ function Test-NetworkComparisonFixtures {
     Assert-NetworkFixture '完整且无差异继续通过' $empty $empty $true
 }
 Test-NetworkComparisonFixtures
+
+function Test-DisconnectedDhcpFixtures {
+    function Get-NetAdapter { @([pscustomobject]@{ifIndex=7;HardwareInterface=$true},[pscustomobject]@{ifIndex=99;HardwareInterface=$false}) }
+    function New-DhcpFixture {
+        $dhcp=[pscustomobject]@{InterfaceAlias='Fixture Ethernet';InterfaceIndex=7;AddressFamily='IPv4';IPAddress='192.0.2.10';PrefixLength=24;Type=1;AddressState=3;SkipAsSource=$false;PrefixOrigin=3;SuffixOrigin=3}
+        $apipa=[pscustomobject]@{InterfaceAlias='Fixture Ethernet';InterfaceIndex=7;AddressFamily='IPv4';IPAddress='169.254.10.123';PrefixLength=16;Type=1;AddressState=1;SkipAsSource=$false;PrefixOrigin=2;SuffixOrigin=4}
+        $routes=@('192.0.2.0/24','192.0.2.10/32','192.0.2.255/32' | ForEach-Object {
+            [pscustomobject]@{InterfaceAlias='Fixture Ethernet';InterfaceIndex=7;AddressFamily='IPv4';DestinationPrefix=$_;NextHop='0.0.0.0';RouteMetric=256;Protocol=2;Publish=0}
+        })
+        $before=[pscustomobject]@{SchemaVersion=1;Complete=$true;FinishedAt='2026-09-15T00:00:00+10:00';ReadErrors=@();Data=[pscustomobject]@{
+            Adapters=@([pscustomobject]@{Name='Fixture Ethernet';InterfaceDescription='Offline physical adapter';ifIndex=7;Status='Disconnected';LinkSpeed='1 Gbps';Virtual=$false;HardwareInterface=$true})
+            Interfaces=@([pscustomobject]@{InterfaceAlias='Fixture Ethernet';InterfaceIndex=7;AddressFamily='IPv4';ConnectionState=0;NlMtuBytes=1500;InterfaceMetric=20;Dhcp=1;RouterDiscovery=2;Forwarding=0;WeakHostSend=0;WeakHostReceive=0})
+            IPAddresses=@($dhcp);ActiveRoutes=$routes;DNS=@();PersistentRoutes=@()
+            WinINETProxy=@();WinHTTPProxy=@();RelatedProcesses=@();RelatedServices=@();RelatedDrivers=@()
+        }}
+        $after=$before | ConvertTo-Json -Depth 10 | ConvertFrom-Json
+        $after.Data.IPAddresses=@($apipa);$after.Data.ActiveRoutes=@()
+        [pscustomobject]@{Before=$before;After=$after}
+    }
+    function Assert-DhcpFixture([string]$Name,[scriptblock]$Edit,[bool]$Expected=$false,[switch]$WithoutContext,[scriptblock]$EditComparison) {
+        $fixture=New-DhcpFixture
+        if ($Edit) { & $Edit $fixture }
+        $comparison=Compare-TrialNetworkState -BaselineState $fixture.Before -CurrentState $fixture.After
+        if ($EditComparison) { & $EditComparison $comparison $fixture }
+        $saved=@($comparison,$fixture.Before,$fixture.After) | ConvertTo-Json -Depth 14 -Compress
+        $result=if ($WithoutContext) { Test-MnaUiConfigurationRestored $comparison } else {
+            Test-MnaUiConfigurationRestored $comparison -BaselineState $fixture.Before -CurrentState $fixture.After
+        }
+        Assert-Offline ($result -eq $Expected) ('断开 DHCP 归类：'+$Name)
+        if ((@($comparison,$fixture.Before,$fixture.After) | ConvertTo-Json -Depth 14 -Compress) -cne $saved) { throw 'DHCP 归类改写了原始快照或差异' }
+    }
+    Assert-DhcpFixture '脱敏重放 DHCP 到 Tentative APIPA 和三条本地路由消失' {} $true
+    Assert-DhcpFixture 'APIPA 已完成地址探测仍可归类' {param($f) $f.After.Data.IPAddresses[0].AddressState=4} $true
+    Assert-DhcpFixture 'APIPA 三条精确附属路由出现仍可归类' {param($f)
+        $f.After.Data.ActiveRoutes=@('169.254.0.0/16','169.254.10.123/32','169.254.255.255/32' | ForEach-Object {
+            [pscustomobject]@{InterfaceAlias='Fixture Ethernet';InterfaceIndex=7;AddressFamily='IPv4';DestinationPrefix=$_;NextHop='0.0.0.0';RouteMetric=256;Protocol=2;Publish=0}
+        })
+    } $true
+    Assert-DhcpFixture '物理链路速度观察变化不妨碍断开证据' {param($f) $f.After.Data.Adapters[0].LinkSpeed='0 bps'} $true
+    Assert-DhcpFixture '旧调用没有上下文仍拒绝 IPv4 变化' {} $false -WithoutContext
+    foreach ($missingSection in @('Adapters','Interfaces','IPAddresses','ActiveRoutes','PersistentRoutes','DNS','WinINETProxy','WinHTTPProxy','RelatedProcesses','RelatedServices','RelatedDrivers')) {
+        foreach ($missingSide in @('Before','After','Both')) {
+            Assert-DhcpFixture ('缺少完整快照节 '+$missingSide+'/'+$missingSection) {
+                param($f)
+                if ($missingSide -in @('Before','Both')) { $f.Before.Data.PSObject.Properties.Remove($missingSection) }
+                if ($missingSide -in @('After','Both')) { $f.After.Data.PSObject.Properties.Remove($missingSection) }
+            }
+        }
+    }
+    foreach ($kind in @('BeforeIncomplete','AfterIncomplete','ReadError','MissingSection','BeforeConnected','AfterConnected','Virtual','NotHardware','UnknownLiveAdapter','MissingAdapter','DuplicateAdapter','AdapterNameChanged','DhcpDisabled','InterfaceConnected','InterfaceMetricChanged','MissingInterface','DuplicateInterface','InterfaceAliasMismatch')) {
+        Assert-DhcpFixture ('不充分接口证据 '+$kind) {
+            param($f)
+            switch ($kind) {
+                'BeforeIncomplete' {$f.Before.Complete=$false}
+                'AfterIncomplete' {$f.After.Complete=$false}
+                'ReadError' {$f.After.ReadErrors=@([pscustomobject]@{Section='DNS';ErrorType='Fixture'})}
+                'MissingSection' {$f.Before.Data.PSObject.Properties.Remove('Adapters')}
+                'BeforeConnected' {$f.Before.Data.Adapters[0].Status='Up'}
+                'AfterConnected' {$f.After.Data.Adapters[0].Status='Up'}
+                'Virtual' {$f.Before.Data.Adapters[0].Virtual=$true;$f.After.Data.Adapters[0].Virtual=$true}
+                'NotHardware' {$f.Before.Data.Adapters[0].HardwareInterface=$false;$f.After.Data.Adapters[0].HardwareInterface=$false}
+                'UnknownLiveAdapter' {
+                    foreach ($state in @($f.Before,$f.After)) {
+                        $state.Data.Adapters[0].ifIndex=77
+                        foreach ($section in @('Interfaces','IPAddresses','ActiveRoutes')) { foreach ($item in @($state.Data.$section)) {$item.InterfaceIndex=77} }
+                    }
+                }
+                'MissingAdapter' {$f.After.Data.Adapters=@()}
+                'DuplicateAdapter' {$f.Before.Data.Adapters+=($f.Before.Data.Adapters[0] | ConvertTo-Json | ConvertFrom-Json)}
+                'AdapterNameChanged' {$f.After.Data.Adapters[0].Name='Changed'}
+                'DhcpDisabled' {$f.Before.Data.Interfaces[0].Dhcp=0;$f.After.Data.Interfaces[0].Dhcp=0}
+                'InterfaceConnected' {$f.Before.Data.Interfaces[0].ConnectionState=1;$f.After.Data.Interfaces[0].ConnectionState=1}
+                'InterfaceMetricChanged' {$f.After.Data.Interfaces[0].InterfaceMetric=10}
+                'MissingInterface' {$f.After.Data.Interfaces=@()}
+                'DuplicateInterface' {$f.After.Data.Interfaces+=($f.After.Data.Interfaces[0] | ConvertTo-Json | ConvertFrom-Json)}
+                'InterfaceAliasMismatch' {$f.Before.Data.Interfaces[0].InterfaceAlias='Other';$f.After.Data.Interfaces[0].InterfaceAlias='Other'}
+            }
+        }
+    }
+    foreach ($kind in @('ManualDhcp','UnknownDhcp','ManualApipa','UnknownApipa','WrongApipaAddress','WrongApipaPrefix','WrongDhcpPrefix','MalformedDhcp','MalformedApipa','DhcpSkipSource','ApipaSkipSource','WrongType','DuplicateState','AddressAliasMismatch','SameIpChangedConfiguration','ExtraAddress','ReverseTransition')) {
+        Assert-DhcpFixture ('不认可地址变化 '+$kind) {
+            param($f)
+            $dhcp=$f.Before.Data.IPAddresses[0];$apipa=$f.After.Data.IPAddresses[0]
+            switch ($kind) {
+                'ManualDhcp' {$dhcp.PrefixOrigin=1;$dhcp.SuffixOrigin=1}
+                'UnknownDhcp' {$dhcp.PrefixOrigin=0;$dhcp.SuffixOrigin=0}
+                'ManualApipa' {$apipa.PrefixOrigin=1;$apipa.SuffixOrigin=1}
+                'UnknownApipa' {$apipa.PrefixOrigin=0;$apipa.SuffixOrigin=0}
+                'WrongApipaAddress' {$apipa.IPAddress='192.0.2.20'}
+                'WrongApipaPrefix' {$apipa.PrefixLength=24}
+                'WrongDhcpPrefix' {$dhcp.PrefixLength=33}
+                'MalformedDhcp' {$dhcp.IPAddress='192.0.2.999'}
+                'MalformedApipa' {$apipa.IPAddress='169.254.invalid'}
+                'DhcpSkipSource' {$dhcp.SkipAsSource=$true}
+                'ApipaSkipSource' {$apipa.SkipAsSource=$true}
+                'WrongType' {$apipa.Type=2}
+                'DuplicateState' {$apipa.AddressState=2}
+                'AddressAliasMismatch' {$apipa.InterfaceAlias='Other'}
+                'SameIpChangedConfiguration' {$apipa.IPAddress=$dhcp.IPAddress}
+                'ExtraAddress' {$f.After.Data.IPAddresses+=($apipa | ConvertTo-Json | ConvertFrom-Json)}
+                'ReverseTransition' {$f.Before.Data.IPAddresses=@($apipa);$f.After.Data.IPAddresses=@($dhcp);$f.After.Data.ActiveRoutes=$f.Before.Data.ActiveRoutes;$f.Before.Data.ActiveRoutes=@()}
+            }
+        }
+    }
+    foreach ($kind in @('WrongInterface','WrongAlias','WrongSide','WrongHost','WrongNetwork','HostBitsInNetwork','WrongBroadcast','NonzeroNextHop','NetMgmtProtocol','UnknownProtocol','ChangedMetric','Published','DefaultRoute','PersistentRoute','DnsChange')) {
+        Assert-DhcpFixture ('不认可路由或配置变化 '+$kind) {
+            param($f)
+            $route=$f.Before.Data.ActiveRoutes[0]
+            switch ($kind) {
+                'WrongInterface' {$route.InterfaceIndex=99}
+                'WrongAlias' {$route.InterfaceAlias='Other'}
+                'WrongSide' {$route.DestinationPrefix='169.254.0.0/16'}
+                'WrongHost' {$route.DestinationPrefix='192.0.2.11/32'}
+                'WrongNetwork' {$route.DestinationPrefix='192.0.3.0/24'}
+                'HostBitsInNetwork' {$route.DestinationPrefix='192.0.2.1/24'}
+                'WrongBroadcast' {$route.DestinationPrefix='192.0.3.255/32'}
+                'NonzeroNextHop' {$route.NextHop='192.0.2.1'}
+                'NetMgmtProtocol' {$route.Protocol=3}
+                'UnknownProtocol' {$route.Protocol=1}
+                'ChangedMetric' {$route.RouteMetric=12}
+                'Published' {$route.Publish=1}
+                'DefaultRoute' {$route.DestinationPrefix='0.0.0.0/0'}
+                'PersistentRoute' {$f.Before.Data.PersistentRoutes=@($route)}
+                'DnsChange' {$f.Before.Data.DNS=@([pscustomobject]@{InterfaceIndex=7;ServerAddresses=@('192.0.2.53')})}
+            }
+        }
+    }
+    Assert-DhcpFixture '无地址转换证据的孤立本地路由仍拒绝' {param($f) $f.Before.Data.IPAddresses=@();$f.After.Data.IPAddresses=@()}
+    Assert-DhcpFixture '差异未包含快照中的路由变化仍拒绝' {} $false -EditComparison {param($c,$f) $c.Changes=@($c.Changes | Where-Object Section -eq 'IPAddresses')}
+    Assert-DhcpFixture '差异与提供的快照不是同一次比较仍拒绝' {} $false -EditComparison {param($c,$f) $f.After.Data.IPAddresses[0].IPAddress='169.254.11.123'}
+}
+Test-DisconnectedDhcpFixtures
 $originalBackendRoot=$script:MnaUiRoot
 $fixtureBase=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'offline-work'))
 $fixtureRoot=Join-Path $fixtureBase ([guid]::NewGuid().ToString('N'))
