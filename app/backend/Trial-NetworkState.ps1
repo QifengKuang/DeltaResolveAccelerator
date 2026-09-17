@@ -177,6 +177,14 @@ function Get-TrialNetworkState {
             $readErrors.Add([pscustomobject]@{Section=$section; ErrorType=$_.Exception.GetType().FullName})
         }
     }
+    # MSFT_NetRoute.Protocol=NetMgmt does not identify who learned a route.
+    # Keep the native route origin as separate evidence, outside configuration
+    # comparison so old snapshots remain compatible and lifetimes do not churn.
+    $routeOriginEvidence=[pscustomobject]@{Complete=$false;Routes=@()}
+    try {
+        . (Join-Path $PSScriptRoot 'Trial-RouteOrigin.ps1')
+        $routeOriginEvidence=Get-TrialRouteOriginEvidence
+    } catch { }
     [pscustomobject]@{
         SchemaVersion = 1
         StartedAt = $started
@@ -184,6 +192,7 @@ function Get-TrialNetworkState {
         Complete = ($readErrors.Count -eq 0)
         ReadErrors = @($readErrors.ToArray())
         Data = [pscustomobject]$data
+        RouteOriginEvidence = $routeOriginEvidence
         Limitations = @(
             'Local-only report retains network addresses and proxy endpoints needed for comparison; URL userinfo/query/fragment are redacted.',
             'WinINET includes current-user registry settings and WinHttpGetIEProxyConfigForCurrentUser, including automatic detection; application-specific proxies are not established.',

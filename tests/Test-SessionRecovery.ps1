@@ -116,7 +116,7 @@ function Test-MnaRebootNetworkRestored {
 function New-RecoveryFixture([string]$Name,[switch]$Owner,[switch]$NoWorker,[string]$Phase='error') {
     $root=Join-Path $fixtureRoot $Name
     $null=[IO.Directory]::CreateDirectory($root)
-    foreach ($file in @('Control-Accelerator.ps1','Mna-SessionRecovery.ps1')) { Copy-Item -LiteralPath (Join-Path $backend $file) -Destination (Join-Path $root $file) }
+    foreach ($file in @('Control-Accelerator.ps1','Mna-SessionRecovery.ps1','Mna-RouterAdvertisementRecovery.ps1')) { Copy-Item -LiteralPath (Join-Path $backend $file) -Destination (Join-Path $root $file) }
     [IO.File]::WriteAllText((Join-Path $root 'Mna-UI.Common.ps1'),($commonParts -join "`n"))
     [IO.File]::WriteAllText((Join-Path $root 'Trial-NetworkState.ps1'),$networkMock)
     [IO.File]::WriteAllText((Join-Path $root 'Mna-GameRoute.ps1'),$gameRouteMock)

@@ -132,6 +132,22 @@ function Test-MnaRebootNetworkRestored {
             $state.Data.Interfaces=@($state.Data.Interfaces | Select-Object -Property * -ExcludeProperty ConnectionState)
             $state.Data.IPAddresses=@($state.Data.IPAddresses | Select-Object -Property * -ExcludeProperty AddressState)
         }
+        # Native evidence uses the same interface identity as its own snapshot.
+        # Rebase only the private copy alongside the corresponding route rows.
+        if ($before.RouteOriginEvidence) {
+            foreach ($entry in @($before.RouteOriginEvidence.Routes)) {
+                $oldIndex=[int]$entry.InterfaceIndex
+                if ($indexMap.ContainsKey($oldIndex)) {
+                    $hop=$null
+                    if ([string]$entry.NextHop -like '*%*') {
+                        if (-not [Net.IPAddress]::TryParse([string]$entry.NextHop,[ref]$hop) -or
+                            -not $hop.IsIPv6LinkLocal -or $hop.ScopeId -ne $oldIndex) { return $false }
+                        $hop.ScopeId=0;$entry.NextHop=$hop.ToString()
+                    }
+                    $entry.InterfaceIndex=$indexMap[$oldIndex]
+                }
+            }
+        }
 
         $parseIpv6={
             param($Text)
@@ -161,6 +177,8 @@ function Test-MnaRebootNetworkRestored {
         }
         $comparison=Compare-TrialNetworkState -BaselineState $before -CurrentState $after
         if (-not $comparison.FullyComparable) { return $false }
+        . (Join-Path $PSScriptRoot 'Mna-RouterAdvertisementRecovery.ps1')
+        $advertisedRoutes=Get-MnaUiRouterAdvertisementChanges -Comparison $comparison -BaselineState $before -CurrentState $after
         $addresses=@{Removed=@();Added=@()}
         $keys=@{Removed=@();Added=@()}
         foreach ($side in @('Removed','Added')) {
@@ -179,6 +197,7 @@ function Test-MnaRebootNetworkRestored {
             if ($change.Section -ne 'ActiveRoutes') { return $false }
             foreach ($side in @('Removed','Added')) {
                 foreach ($route in @($change.$side)) {
+                    if ($advertisedRoutes -and ($route | ConvertTo-Json -Depth 10 -Compress) -cin $advertisedRoutes[$side+'Routes']) { continue }
                     if ($route.AddressFamily -ne 'IPv6' -or $route.Protocol -ne 2 -or $route.RouteMetric -ne 256 -or $route.Publish -ne 0) { return $false }
                     $parts=([string]$route.DestinationPrefix).Split('/')
                     if ($parts.Count -ne 2 -or $parts[1] -cne '128') { return $false }

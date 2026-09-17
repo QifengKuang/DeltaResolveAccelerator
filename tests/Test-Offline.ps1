@@ -21,6 +21,11 @@ if (-not $backend.Passed -or $backend.NetworkStarted) { throw 'Unexpected backen
 $rebootOutput=& $pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Test-RebootRecovery.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Reboot network recovery tests failed.' }
 [IO.File]::WriteAllText((Join-Path $output 'reboot-recovery.txt'),($rebootOutput | Out-String),[Text.UTF8Encoding]::new($false))
+$routeOutput=& $pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Test-RouterAdvertisementRecovery.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Router advertisement recovery tests failed.' }
+$route=$routeOutput | Out-String | ConvertFrom-Json
+if (-not $route.Passed -or $route.NetworkStarted -or $route.SdkStarted -or -not $route.InputsUnmodified) { throw 'Unexpected route recovery test result.' }
+[IO.File]::WriteAllText((Join-Path $output 'route-origin-recovery.json'),($route | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
 $sessionOutput=& $pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Test-SessionRecovery.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Session recovery flow tests failed.' }
 $session=$sessionOutput | Out-String | ConvertFrom-Json
@@ -57,6 +62,7 @@ $summary=[pscustomobject]@{
     Passed=$true
     BackendChecks=$backend.Checks
     RebootRecoveryPassed=$true
+    RouterAdvertisementChecks=$route.CheckCount
     SessionRecoveryChecks=$session.CheckCount
     AtomicStateChecks=$atomic.CheckCount
     UiChecks=$uiChecks

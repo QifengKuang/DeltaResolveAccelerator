@@ -82,6 +82,13 @@ function Invoke-MnaUiRecovery {
         $comparison=Compare-TrialNetworkState -BaselineState $before -CurrentState $after
         $null=Save-TrialNetworkState -State $comparison -Label ui_recovery_comparison
         $restored=Test-MnaUiConfigurationRestored $comparison -BaselineState $before -CurrentState $after
+        if ($restored -and -not $comparison.Equal) {
+            . (Join-Path $PSScriptRoot 'Mna-RouterAdvertisementRecovery.ps1')
+            $routeAssessment=Get-MnaUiRouterAdvertisementChanges -Comparison $comparison -BaselineState $before -CurrentState $after
+            if ($routeAssessment -and (@($routeAssessment.RemovedRoutes).Count -or @($routeAssessment.AddedRoutes).Count)) {
+                $null=Save-TrialNetworkState -State ([pscustomobject]@{RunId=$Record.RunId;Classification='RouterAdvertisementRouteChange';LegacyReplacementCount=$routeAssessment.LegacyReplacementCount;OriginalDifferencesPreserved=$true}) -Label ui_recovery_route_origin
+            }
+        }
         if (-not $restored) {
             $bootTime=$null
             try { $bootTime=(Get-CimInstance Win32_OperatingSystem -Property LastBootUpTime -ErrorAction Stop).LastBootUpTime } catch { }

@@ -3,9 +3,11 @@
 $ErrorActionPreference='Stop'
 $backend=Join-Path (Split-Path $PSScriptRoot -Parent) 'app/backend'
 . (Join-Path $backend 'Trial-NetworkState.ps1')
+. (Join-Path $backend 'Mna-RouterAdvertisementRecovery.ps1')
 . (Join-Path $backend 'Mna-RebootRecovery.ps1')
 function Get-NetAdapter { throw 'Fixture must not query network adapters' }
 function Get-CimInstance { throw 'Fixture must not query processes or Windows' }
+function Get-TrialRouteOriginEvidence { throw 'Fixture must not query native route origins' }
 function Stop-Process { throw 'Fixture must not stop processes' }
 function Set-DnsClientServerAddress { throw 'Fixture must not change DNS' }
 function New-NetRoute { throw 'Fixture must not change routes' }
@@ -84,6 +86,33 @@ function Assert-RebootFixture {
     $script:rebootChecks++
 }
 
+function Add-RebootRouterAdvertisementFixture {
+    param([object]$Fixture,[switch]$IncludeAdditionAndRemoval)
+    foreach ($side in @('Before','After')) {
+        $state=$Fixture.$side
+        $index=if ($side -eq 'Before') {7} else {17}
+        $nextHop=if ($side -eq 'Before') {'fe80::1'} else {'fe80::2'}
+        $routes=@([pscustomobject]@{
+            InterfaceAlias='Wi-Fi';InterfaceIndex=$index;AddressFamily='IPv6';DestinationPrefix='fd99:a3dc:1578::/64'
+            NextHop=$nextHop;RouteMetric=256;Protocol=3;Publish=0
+        })
+        if ($IncludeAdditionAndRemoval) {
+            $prefix=if ($side -eq 'Before') {'fd10:ab1c:d16c:1::/64'} else {'fd22:e412:3463:4335::/64'}
+            $routes+=[pscustomobject]@{
+                InterfaceAlias='Wi-Fi';InterfaceIndex=$index;AddressFamily='IPv6';DestinationPrefix=$prefix
+                NextHop='::';RouteMetric=256;Protocol=3;Publish=0
+            }
+        }
+        $state.Data.ActiveRoutes+=$routes
+        $state | Add-Member RouteOriginEvidence ([pscustomobject]@{
+            Complete=$true
+            Routes=@($routes | ForEach-Object {
+                [pscustomobject]@{InterfaceIndex=$_.InterfaceIndex;DestinationPrefix=$_.DestinationPrefix;NextHop=$_.NextHop;Origin=3}
+            })
+        })
+    }
+}
+
 Assert-RebootFixture 'renumbered Wi-Fi/WSL, automatic IPv6 rotation and unchanged shared tunnel' {} $true
 Assert-RebootFixture 'carrier observations may change' {param($f) $f.After.Data.Adapters[0].Status='Disconnected';$f.After.Data.Adapters[0].LinkSpeed='0 bps';$f.After.Data.Interfaces[0].ConnectionState=0} $true
 Assert-RebootFixture 'new snapshots may add unique adapter GUIDs' {param($f) foreach($a in $f.After.Data.Adapters) {$a | Add-Member InterfaceGuid ([guid]::NewGuid().ToString())}} $true
@@ -102,6 +131,30 @@ Assert-RebootFixture 'Windows link-local scope changes with interface index' {
     }
 } $true
 Assert-RebootFixture 'scope must match the address interface' {param($f) $f.After.Data.IPAddresses[0].IPAddress+='%'+'999'}
+Assert-RebootFixture 'reboot index remapping and IPv6 rotation combine with proven RA add, remove and next-hop replacement' {
+    param($f)
+    Add-RebootRouterAdvertisementFixture $f -IncludeAdditionAndRemoval
+} $true
+Assert-RebootFixture 'reboot index remapping retains legacy RA next-hop replacement compatibility' {
+    param($f)
+    Add-RebootRouterAdvertisementFixture $f
+    $f.Before.PSObject.Properties.Remove('RouteOriginEvidence')
+} $true
+Assert-RebootFixture 'reboot must not reclassify a manual baseline route as RA' {
+    param($f)
+    Add-RebootRouterAdvertisementFixture $f
+    $f.Before.RouteOriginEvidence.Routes[0].Origin=0
+}
+Assert-RebootFixture 'reboot cannot bypass a failed current origin query' {
+    param($f)
+    Add-RebootRouterAdvertisementFixture $f
+    $f.After.RouteOriginEvidence.Complete=$false
+}
+Assert-RebootFixture 'reboot current origin evidence must use the current interface index' {
+    param($f)
+    Add-RebootRouterAdvertisementFixture $f
+    $f.After.RouteOriginEvidence.Routes[0].InterfaceIndex=7
+}
 
 foreach ($kind in @('SameBoot','OwnerAfterBoot','BaselineAtBoot','CurrentBeforeBoot','UnknownBoot','BadBaselineTime','NoOffsetTime','WrongRun','IncompleteBefore','IncompleteAfter','ReadError','NullSection','SdkProcess','SdkService','SdkDriver','CurrentTun','OtherTun','TunInterface','TunRoute','TunDns','MpTun','AddedAdapter','DeletedAdapter','AmbiguousAdapter','DuplicateIndex','RenamedAdapter','DifferentDescription','ChangedVirtual','GuidMismatch','GuidDisappeared','DuplicateGuid','UnknownInterface','AliasMismatch','Mtu','InterfaceMetric','Dhcp','RouterDiscovery','DNS','DnsOrder','WinINET','WinHTTP','PersistentRoute','DefaultRoute','ManualIpv6','ManualSuffix','UnknownOrigin','SkipAsSource','WrongPrefix','Multicast','IPv4Address','SameAddressConfiguration','UnrelatedHostRoute','WrongSideHostRoute','RouteMetric','RouteProtocol','RoutePublished','RemoteNextHop','NonHostRoute','SharedDriverChanged','UnknownSection')) {
     Assert-RebootFixture $kind {

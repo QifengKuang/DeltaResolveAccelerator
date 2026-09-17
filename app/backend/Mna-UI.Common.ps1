@@ -732,6 +732,11 @@ function Test-MnaUiConfigurationRestored {
         $physicalIndexes=@(Get-NetAdapter -IncludeHidden -ErrorAction Stop | Where-Object HardwareInterface | ForEach-Object ifIndex)
     }
     $disconnectedDhcp=Get-MnaUiDisconnectedDhcpChanges -Comparison $Comparison -BaselineState $BaselineState -CurrentState $CurrentState
+    . (Join-Path $PSScriptRoot 'Mna-RouterAdvertisementRecovery.ps1')
+    $advertisedRoutes=$null
+    if ($BaselineState -and $CurrentState) {
+        $advertisedRoutes=Get-MnaUiRouterAdvertisementChanges -Comparison $Comparison -BaselineState $BaselineState -CurrentState $CurrentState
+    }
     $parseIpv6={
         param($Text)
         $address=$null
@@ -790,6 +795,7 @@ function Test-MnaUiConfigurationRestored {
             }
             foreach ($side in @('Removed','Added')) {
                 foreach ($item in @($change.$side)) {
+                    if ($advertisedRoutes -and ($item | ConvertTo-Json -Depth 6 -Compress) -cin $advertisedRoutes[$side+'Routes']) { continue }
                     if ($item.InterfaceIndex -in $physicalIndexes -and $disconnectedDhcp -and
                         ($item | ConvertTo-Json -Depth 6 -Compress) -cin $disconnectedDhcp[$side+'Routes']) { continue }
                     # Protocol=3 is NetMgmt, not proof of RA origin. Even a
