@@ -177,6 +177,14 @@ function Get-TrialNetworkState {
             $readErrors.Add([pscustomobject]@{Section=$section; ErrorType=$_.Exception.GetType().FullName})
         }
     }
+    # MSFT_NetRoute.Protocol=NetMgmt does not identify who learned a route.
+    # Keep the native route origin as separate evidence, outside configuration
+    # comparison so old snapshots remain compatible and lifetimes do not churn.
+    $routeOriginEvidence=[pscustomobject]@{Complete=$false;Routes=@()}
+    try {
+        . (Join-Path $PSScriptRoot 'Trial-RouteOrigin.ps1')
+        $routeOriginEvidence=Get-TrialRouteOriginEvidence
+    } catch { }
     [pscustomobject]@{
         SchemaVersion = 1
         StartedAt = $started
@@ -184,6 +192,7 @@ function Get-TrialNetworkState {
         Complete = ($readErrors.Count -eq 0)
         ReadErrors = @($readErrors.ToArray())
         Data = [pscustomobject]$data
+        RouteOriginEvidence = $routeOriginEvidence
         Limitations = @(
             'Local-only report retains network addresses and proxy endpoints needed for comparison; URL userinfo/query/fragment are redacted.',
             'WinINET includes current-user registry settings and WinHttpGetIEProxyConfigForCurrentUser, including automatic detection; application-specific proxies are not established.',
@@ -204,7 +213,11 @@ function Save-TrialNetworkState {
     New-Item -ItemType Directory -Path $script:MnaTrialNetworkResults -Force -ErrorAction Stop | Out-Null
     $name = '{0}_{1}_{2}.json' -f $Label,(Get-Date -Format 'yyyyMMdd_HHmmss_fff'),([guid]::NewGuid().ToString('N').Substring(0,8))
     $path = Join-Path $script:MnaTrialNetworkResults $name
-    $State | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath $path -Encoding utf8 -ErrorAction Stop
+    # A baseline must reach disk before a process can change networking.
+    $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($State | ConvertTo-Json -Depth 14))
+    $stream=[IO.FileStream]::new($path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read,4096,[IO.FileOptions]::WriteThrough)
+    try { $stream.Write($bytes,0,$bytes.Length);$stream.Flush($true) }
+    finally { $stream.Dispose() }
     return $path
 }
 

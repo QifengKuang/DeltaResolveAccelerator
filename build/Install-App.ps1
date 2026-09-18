@@ -17,7 +17,7 @@ if (-not $IsWindows) { throw 'Installation requires Windows.' }
 $utf8=[Text.UTF8Encoding]::new($false)
 $registryPath='HKCU:\Software\DeltaResolveAccelerator'
 $managed=@('DeltaLauncher.exe','Accelerator.exe','Accelerator.exe.config','DeltaResolve.ico')
-$backendNames=@('Check-Configuration.ps1','Control-Accelerator.ps1','Mna-GameRoute.ps1','Mna-UI.Common.ps1','Run-Accelerator.ps1','Test-UdpStun.ps1','Trial-NetworkState.ps1')
+$backendNames=@('Check-Configuration.ps1','Control-Accelerator.ps1','Mna-GameRoute.ps1','Mna-RebootRecovery.ps1','Mna-RouterAdvertisementRecovery.ps1','Mna-SessionRecovery.ps1','Mna-UI.Common.ps1','Run-Accelerator.ps1','Test-UdpStun.ps1','Trial-NetworkState.ps1','Trial-RouteOrigin.ps1')
 $isolated=-not [string]::IsNullOrWhiteSpace($TestRoot)
 if ($TestFailAfterCopy -and -not $isolated) { throw 'Failure injection is available only in an isolated test root.' }
 function FullPath([string]$Path) { [IO.Path]::GetFullPath($Path).TrimEnd('\') }
