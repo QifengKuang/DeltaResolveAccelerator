@@ -94,7 +94,7 @@ Must-Reject 'FreshRequiresExplicitDependencies' { & $installer -SourceDirectory 
 $runtime=Join-Path $test 'CleanRuntime'; $sdk=Join-Path $test 'CleanSdk'
 foreach ($file in @('pwsh.exe','LICENSE.txt','ThirdPartyNotices.txt')) { Put (Join-Path $runtime $file) ('clean runtime '+$file) }
 foreach ($file in @('linkboost/linkboost.exe','linkboost/linkboost-core.exe','linkboost/helper/multipath-helper.exe')) { Put (Join-Path $sdk $file) ('clean sdk '+$file) }
-foreach ($file in @('Check-Configuration.ps1','Control-Accelerator.ps1','Mna-GameRoute.ps1','Mna-UI.Common.ps1','Run-Accelerator.ps1','Test-UdpStun.ps1','Trial-NetworkState.ps1')) { Put (Join-Path $source ('backend/'+$file)) ('clean backend '+$file) }
+foreach ($file in @('Check-Configuration.ps1','Control-Accelerator.ps1','Mna-GameRoute.ps1','Mna-RebootRecovery.ps1','Mna-ReleasedResources.ps1','Mna-RouterAdvertisementRecovery.ps1','Mna-SessionRecovery.ps1','Mna-UI.Common.ps1','Run-Accelerator.ps1','Test-UdpStun.ps1','Trial-NetworkState.ps1','Trial-RouteOrigin.ps1')) { Put (Join-Path $source ('backend/'+$file)) ('clean backend '+$file) }
 Put (Join-Path $sdk 'linkboost/mp_client_uuid.conf') 'synthetic contaminated dependency'
 Must-Reject 'GeneratedSdkIdentityRejected' { & $installer -SourceDirectory $source -TestRoot $freshRoot -FreshInstall -PreparedRuntimeDirectory $runtime -PreparedSdkDirectory $sdk } 'generated state or secrets'
 [IO.File]::Delete((Join-Path $sdk 'linkboost/mp_client_uuid.conf'))

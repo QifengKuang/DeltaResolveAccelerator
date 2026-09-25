@@ -430,14 +430,14 @@ namespace DeltaResolveAccelerator
         internal string StepText(BackendState state)
         {
             if (!IsWaiting) return "";
-            if (Phase == "checking") return "正在读取本机连接状态";
+            if (Phase == "checking") return "正在检查并恢复连接";
             if (!String.IsNullOrWhiteSpace(state.ProgressStage)) return state.ProgressStage;
             if (!String.IsNullOrWhiteSpace(state.Message)) return state.Message;
             return Phase == "stopping" ? "正在请求关闭并恢复连接设置" : "正在请求建立解析连接";
         }
         internal string ReferenceText()
         {
-            if (Phase == "checking") return "读取完成后显示当前连接状态。";
+            if (Phase == "checking") return "若上次意外中断，将自动恢复连接设置。";
             if (Phase == "stopping") return "恢复完成后会自动停止动画。";
             return LastSuccessfulWaitSeconds.HasValue ? "上次等待 " + Math.Ceiling(LastSuccessfulWaitSeconds.Value).ToString("0") +
                 " 秒，仅供参考" : "正在建立连接，耗时取决于网络";
@@ -696,7 +696,7 @@ namespace DeltaResolveAccelerator
                 if (preview) return;
                 UpdateManager.CheckInBackground(root);
                 updateTimer.Start();
-                try { await RefreshStatusAsync(); }
+                try { await RefreshStatusAsync(true); }
                 finally { initialStatusPending = false; ApplyState(); }
                 if (!closing) timer.Start();
             };
@@ -1270,7 +1270,7 @@ namespace DeltaResolveAccelerator
             bool active = state.Phase == "connected" && state.Ready;
             bool transitioning = busy || connectionWait.IsWaiting;
             art.Connected = active; art.Invalidate();
-            stateTitle.Text = initialStatusPending ? "正在读取状态" : active ? "已连接" : state.Phase == "starting" ? "正在连接" :
+            stateTitle.Text = initialStatusPending ? "正在检查连接" : active ? "已连接" : state.Phase == "starting" ? "正在连接" :
                 state.Phase == "stopping" ? "正在关闭" : state.Phase == "error" ? "连接需要处理" : "尚未开启";
             phasePill.Text = active ? "香港解析 · 已就绪" : state.Phase == "error" ? "需要处理" :
                 transitioning ? "处理中" : "待机";
@@ -1677,12 +1677,27 @@ namespace DeltaResolveAccelerator
             catch (Exception ex) { SetError(UserError(ex)); }
             finally { busy = false; operationGate.Release(); ApplyState(); }
         }
-        private async Task RefreshStatusAsync()
+        private async Task RefreshStatusAsync(bool recoverAbandonedSession = false)
         {
             if (preview || busy || closing || !await operationGate.WaitAsync(0)) return;
-            try { await InvokeBackendAsync("Status"); }
+            try
+            {
+                if (recoverAbandonedSession)
+                {
+                    // Only the first display recovers abandoned state; timer polls remain read-only.
+                    busy = true; ApplyState();
+                    // UI-only updates can retain an older backend without the recovery action.
+                    if (File.Exists(Path.Combine(root, "backend", "Mna-SessionRecovery.ps1")))
+                        await InvokeBackendAsync("Recover");
+                }
+                await InvokeBackendAsync("Status");
+            }
             catch (Exception ex) { SetError(UserError(ex)); }
-            finally { operationGate.Release(); ApplyState(); }
+            finally
+            {
+                if (recoverAbandonedSession) busy = false;
+                operationGate.Release(); ApplyState();
+            }
         }
         private void BeginLocalOperation(string phase)
         {
@@ -1959,7 +1974,7 @@ namespace DeltaResolveAccelerator
                 BackendState resumed = MainForm.ParseBackendResponse("{\"phase\":\"starting\",\"ready\":false,\"progressStage\":\"正在等待服务就绪\",\"operationStartedAt\":\"2026-09-15T00:00:00+00:00\"}");
                 ConnectionWaitState reopened = new ConnectionWaitState();
                 reopened.Update(new BackendState(), true, epoch.AddSeconds(18));
-                bool initialCheckAnimated = reopened.IsWaiting && reopened.StepText(new BackendState()).Contains("读取");
+                bool initialCheckAnimated = reopened.IsWaiting && reopened.StepText(new BackendState()).Contains("恢复");
                 reopened.Update(resumed, false, epoch.AddSeconds(20));
                 results["reopenedOperationUsesBackendOrigin"] = initialCheckAnimated && reopened.ElapsedSeconds(epoch.AddSeconds(20)) == 20 && reopened.StepText(resumed) == "正在等待服务就绪";
                 ConnectionWaitState future = new ConnectionWaitState();

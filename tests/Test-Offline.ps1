@@ -18,6 +18,25 @@ $backend=$backendOutput | Out-String | ConvertFrom-Json
 if (-not $backend.Passed -or $backend.NetworkStarted) { throw 'Unexpected backend test result.' }
 [IO.File]::WriteAllText((Join-Path $output 'backend.json'),($backend | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
 
+$rebootOutput=& $pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Test-RebootRecovery.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Reboot network recovery tests failed.' }
+[IO.File]::WriteAllText((Join-Path $output 'reboot-recovery.txt'),($rebootOutput | Out-String),[Text.UTF8Encoding]::new($false))
+$routeOutput=& $pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Test-RouterAdvertisementRecovery.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Router advertisement recovery tests failed.' }
+$route=$routeOutput | Out-String | ConvertFrom-Json
+if (-not $route.Passed -or $route.NetworkStarted -or $route.SdkStarted -or -not $route.InputsUnmodified) { throw 'Unexpected route recovery test result.' }
+[IO.File]::WriteAllText((Join-Path $output 'route-origin-recovery.json'),($route | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+$releaseOutput=& $pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Test-ReleasedResources.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Released resource tests failed.' }
+$release=$releaseOutput | Out-String | ConvertFrom-Json
+if (-not $release.Passed -or $release.NetworkStarted) { throw 'Unexpected resource release test result.' }
+[IO.File]::WriteAllText((Join-Path $output 'released-resources.json'),($release | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+$sessionOutput=& $pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Test-SessionRecovery.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Session recovery flow tests failed.' }
+$session=$sessionOutput | Out-String | ConvertFrom-Json
+if (-not $session.Passed -or $session.NetworkStarted -or $session.SdkStarted -or -not $session.FixtureCleanupVerified) { throw 'Unexpected recovery test result.' }
+[IO.File]::WriteAllText((Join-Path $output 'session-recovery.json'),($session | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+
 $atomicOutput=& $pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Test-AtomicRuntimeState.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Atomic runtime state tests failed.' }
 $reportLine=@($atomicOutput | Where-Object { $_ -like 'ReportPath: *' })
@@ -47,6 +66,10 @@ $uiChecks=@($ui.PSObject.Properties | Where-Object { $_.Name -notin @('passed','
 $summary=[pscustomobject]@{
     Passed=$true
     BackendChecks=$backend.Checks
+    RebootRecoveryPassed=$true
+    RouterAdvertisementChecks=$route.CheckCount
+    ReleasedResourceChecks=$release.CheckCount
+    SessionRecoveryChecks=$session.CheckCount
     AtomicStateChecks=$atomic.CheckCount
     UiChecks=$uiChecks
     NetworkStarted=$false

@@ -16,4 +16,4 @@ PowerShell 的主项目使用 MIT 许可，包含的模块可能另有许可。�
 
 如手动准备，先确认加速器已停止且退出，将干净的 SDK 原始 ZIP 解压至 `app/backend/vendor_inspection/sdk_v0.23.1/`，将 PowerShell 官方完整 ZIP 解压至 `app/runtime/`。不要把已有的 `private`、`results`、`user-settings.json` 或运行生成的 SDK 文件合并进新目录。
 
-本仓库不含 Inno Setup、安装器引擎或第三方语言文件。当前构建脚本只产生客户端程序，不产生可再分发的安装包。
+本仓库不含 Inno Setup、第三方安装器引擎或第三方语言文件。构建脚本可产生本项目自有客户端、轻量安装器和完整自有程序包；这些产物均不携带上述第三方运行依赖，也不授予其再分发许可。

@@ -1,5 +1,7 @@
 # 安装、快捷方式与自动更新
 
+当前完整版本为 **1.1.1**，包含新的后端恢复模块。请先阅读 [完整构建与部署说明](BUILD.md)。本文的普通安装更新命令和签名自动更新通道仍只替换界面；下面的 1.1.0 版本路径用于说明旧通道，不能获得 1.1.1 的后端修复。
+
 ## 固定安装位置
 
 默认安装目录是 `%LOCALAPPDATA%\Programs\DeltaResolveAccelerator`。首次安装可用 `-InstallDirectory` 选择另一个长期使用的本地目录；位置保存在 `HKCU\Software\DeltaResolveAccelerator\InstallPath`，后续安装和修复自动沿用。已有安装不通过重新选择目录来搬迁，避免产生第二份程序和不同的设备配置。
