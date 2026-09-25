@@ -1,0 +1,270 @@
+{
+  "schemaVersion": 1,
+  "kind": "complete-first-party-application",
+  "version": "1.1.1",
+  "platform": "win-x64",
+  "source": {
+    "gitRevision": "939c090745c25c501f203cbec775597a772140e8",
+    "workingTreeDirty": false,
+    "inputs": [
+      {
+        "name": "app/backend/Check-Configuration.ps1",
+        "sha256": "3e482358d0c871ce795d013adeb1cba32a5cac3066a666bbbc05c85d5eb96bb5",
+        "size": 1053
+      },
+      {
+        "name": "app/backend/Control-Accelerator.ps1",
+        "sha256": "517d0f4909cc126b54f92f7bc2716ad046e6794202e885babcaa12ff1cf2fe0c",
+        "size": 3323
+      },
+      {
+        "name": "app/backend/Mna-GameRoute.ps1",
+        "sha256": "983cf708296c7b9e5d1c75904f1e324f9857ddde904ba9258ee46d7065337e41",
+        "size": 26008
+      },
+      {
+        "name": "app/backend/Mna-RebootRecovery.ps1",
+        "sha256": "5dd5ab3c4dcf909fd02a14046db92b96c8c5d788640fc640fe1742c144f08de8",
+        "size": 8451
+      },
+      {
+        "name": "app/backend/Mna-ReleasedResources.ps1",
+        "sha256": "65828e16839c10b8c630ef87fc2647dcc12aa14b1aa5bece0b403df91ada08fc",
+        "size": 9531
+      },
+      {
+        "name": "app/backend/Mna-RouterAdvertisementRecovery.ps1",
+        "sha256": "28d0b599282c233e9a1f3562eac59fc84d77b98ebf84022b08ce8613042ac669",
+        "size": 10796
+      },
+      {
+        "name": "app/backend/Mna-SessionRecovery.ps1",
+        "sha256": "7ab9a3908fb3deba8a07a176431d000e6ed9a70addfff37d5c96f354c7091dcb",
+        "size": 11164
+      },
+      {
+        "name": "app/backend/Mna-UI.Common.ps1",
+        "sha256": "b73f0a210fd0f6860ccc2677c2ec225976521230f68594f39d2614c4ebe5d44c",
+        "size": 55415
+      },
+      {
+        "name": "app/backend/Run-Accelerator.ps1",
+        "sha256": "7d4fa5cc2581167faada81c2b0769d5ec1fe2fc0c5391c7ea94486e61c74d7ec",
+        "size": 21072
+      },
+      {
+        "name": "app/backend/Test-UdpStun.ps1",
+        "sha256": "0e176698ee00d970a063a96e5a3a19f8074044f2b8690c82114369175e2e201a",
+        "size": 8302
+      },
+      {
+        "name": "app/backend/Trial-NetworkState.ps1",
+        "sha256": "2159e43aba86b28c983881cbafaa5955aaf1dac1ca420d6ca415db3a479b2188",
+        "size": 13908
+      },
+      {
+        "name": "app/backend/Trial-RouteOrigin.ps1",
+        "sha256": "5c2e3f2c3811226b930e272499835ae569e7fe173e2af7a6cfc8af9ef1858407",
+        "size": 6726
+      },
+      {
+        "name": "build/Build-ApplicationBundle.ps1",
+        "sha256": "22e71342cd28d8839d4b38a4a03d3ea2294cd98b57f3ff7f53408d21f8ee6a68",
+        "size": 9181
+      },
+      {
+        "name": "build/Compile-App.ps1",
+        "sha256": "883bad898096ec19e665e68ab6c3be393a2a31012f2c6b828f9c75b060e978f3",
+        "size": 1848
+      },
+      {
+        "name": "build/Compile-Launcher.ps1",
+        "sha256": "abfad0c4ccea719979139bfd816e47790e350cadad9fa6cdbbacbc4004775463",
+        "size": 1368
+      },
+      {
+        "name": "build/New-AppAssets.ps1",
+        "sha256": "b381b98d27c888254a3524eb0915f458ffce26ffc03d3c5a88c1bc32dcd6a952",
+        "size": 2992
+      },
+      {
+        "name": "build/Prepare-Dependencies.ps1",
+        "sha256": "0e0605fdbef2c4c1be7feb0cff85d781a8dadc702fcfd0bfefa9471da2e17e82",
+        "size": 5875
+      },
+      {
+        "name": "docs/BUILD.md",
+        "sha256": "83d36e1c68994aa80d29894adb79b7ef3e8594d8bb2916cfc7afcfbd9ee92457",
+        "size": 4492
+      },
+      {
+        "name": "docs/DEPENDENCIES.md",
+        "sha256": "466f8e3dadf1172af3d30a20a38b2968cb89a6c08c31c42008108f54f67a9c85",
+        "size": 2104
+      },
+      {
+        "name": "LICENSE",
+        "sha256": "6cbe493002bfd07c8499debbe928c310333f21bfef862044905ded208ee7b5cb",
+        "size": 1068
+      },
+      {
+        "name": "src/Accelerator.exe.config",
+        "sha256": "5d4cd327e430b0139d55bb5204d25e3944214cbeaa75a3790bb6771ed04dc26d",
+        "size": 212
+      },
+      {
+        "name": "src/AcceleratorApp.cs",
+        "sha256": "bf996afed15895f8d0414f236b41739a797227ca1dbc8ef0bc52f216bb0dd250",
+        "size": 130896
+      },
+      {
+        "name": "src/app.manifest",
+        "sha256": "bbd3af2860efa995baebf3e806002c1616a14e1d1f5b40d9440a352d7a4269c9",
+        "size": 849
+      },
+      {
+        "name": "src/AssemblyInfo.cs",
+        "sha256": "2727f8185ad1f140a0a6e30621fd6a80f886304726fcf28350c53b850223537c",
+        "size": 389
+      },
+      {
+        "name": "src/GameDiscovery.cs",
+        "sha256": "6799711ce91651c83e21174c807d9a29497c87fe1da6bd20f417e4203395803d",
+        "size": 14143
+      },
+      {
+        "name": "src/Launcher.cs",
+        "sha256": "e839de03e6a1822af747ee0be56319a2582c47b1edd8eccb002ebdddab56897b",
+        "size": 11602
+      },
+      {
+        "name": "src/launcher.manifest",
+        "sha256": "0eecb7b4070f67c213a59d659d562ea8d226834978410dc142cf57eefacfbb89",
+        "size": 634
+      },
+      {
+        "name": "src/UpdateManager.cs",
+        "sha256": "7db7deda2164fe2ec18ff39bd18f725c86f5b2ba03ed136d4fd3650a55c3a8c8",
+        "size": 39755
+      },
+      {
+        "name": "src/UpdatePublicKey.cs",
+        "sha256": "183793acb091e33156f3e256ce88d97bd4d28220f38515e5239152ab5e2e8ce2",
+        "size": 694
+      }
+    ]
+  },
+  "compiler": {
+    "name": "Microsoft .NET Framework C#",
+    "fileVersion": "4.8.9221.0 built by: NET481REL1LAST_25H2",
+    "sha256": "46809206887326d2d24db1eff1f3064de972c3451abe766b49111450a5e08e00"
+  },
+  "dependencies": {
+    "bundled": false,
+    "powerShell": "7.6.6 Windows x64",
+    "mnaSdk": "0.23.1_e012851",
+    "instructions": "docs/DEPENDENCIES.md"
+  },
+  "files": [
+    {
+      "name": "app/Accelerator.exe",
+      "sha256": "75a5e5e6bb2082ff8b5d0ab8c6414533b0ceb627253863654e4ebc7f95f82d2e",
+      "size": 151040
+    },
+    {
+      "name": "app/Accelerator.exe.config",
+      "sha256": "5d4cd327e430b0139d55bb5204d25e3944214cbeaa75a3790bb6771ed04dc26d",
+      "size": 212
+    },
+    {
+      "name": "app/backend/Check-Configuration.ps1",
+      "sha256": "3e482358d0c871ce795d013adeb1cba32a5cac3066a666bbbc05c85d5eb96bb5",
+      "size": 1053
+    },
+    {
+      "name": "app/backend/Control-Accelerator.ps1",
+      "sha256": "517d0f4909cc126b54f92f7bc2716ad046e6794202e885babcaa12ff1cf2fe0c",
+      "size": 3323
+    },
+    {
+      "name": "app/backend/Mna-GameRoute.ps1",
+      "sha256": "983cf708296c7b9e5d1c75904f1e324f9857ddde904ba9258ee46d7065337e41",
+      "size": 26008
+    },
+    {
+      "name": "app/backend/Mna-RebootRecovery.ps1",
+      "sha256": "5dd5ab3c4dcf909fd02a14046db92b96c8c5d788640fc640fe1742c144f08de8",
+      "size": 8451
+    },
+    {
+      "name": "app/backend/Mna-ReleasedResources.ps1",
+      "sha256": "65828e16839c10b8c630ef87fc2647dcc12aa14b1aa5bece0b403df91ada08fc",
+      "size": 9531
+    },
+    {
+      "name": "app/backend/Mna-RouterAdvertisementRecovery.ps1",
+      "sha256": "28d0b599282c233e9a1f3562eac59fc84d77b98ebf84022b08ce8613042ac669",
+      "size": 10796
+    },
+    {
+      "name": "app/backend/Mna-SessionRecovery.ps1",
+      "sha256": "7ab9a3908fb3deba8a07a176431d000e6ed9a70addfff37d5c96f354c7091dcb",
+      "size": 11164
+    },
+    {
+      "name": "app/backend/Mna-UI.Common.ps1",
+      "sha256": "b73f0a210fd0f6860ccc2677c2ec225976521230f68594f39d2614c4ebe5d44c",
+      "size": 55415
+    },
+    {
+      "name": "app/backend/Run-Accelerator.ps1",
+      "sha256": "7d4fa5cc2581167faada81c2b0769d5ec1fe2fc0c5391c7ea94486e61c74d7ec",
+      "size": 21072
+    },
+    {
+      "name": "app/backend/Test-UdpStun.ps1",
+      "sha256": "0e176698ee00d970a063a96e5a3a19f8074044f2b8690c82114369175e2e201a",
+      "size": 8302
+    },
+    {
+      "name": "app/backend/Trial-NetworkState.ps1",
+      "sha256": "2159e43aba86b28c983881cbafaa5955aaf1dac1ca420d6ca415db3a479b2188",
+      "size": 13908
+    },
+    {
+      "name": "app/backend/Trial-RouteOrigin.ps1",
+      "sha256": "5c2e3f2c3811226b930e272499835ae569e7fe173e2af7a6cfc8af9ef1858407",
+      "size": 6726
+    },
+    {
+      "name": "app/DeltaLauncher.exe",
+      "sha256": "61fb17fd48802d21aac278a4d6df848ee4731c670d2260d949bc87180075cc18",
+      "size": 48640
+    },
+    {
+      "name": "app/DeltaResolve.ico",
+      "sha256": "c71ffc1f1f59bc8e619349bca1aadab8f3d463b59e91ac873abad3dcde367e7d",
+      "size": 10693
+    },
+    {
+      "name": "build/Prepare-Dependencies.ps1",
+      "sha256": "0e0605fdbef2c4c1be7feb0cff85d781a8dadc702fcfd0bfefa9471da2e17e82",
+      "size": 5875
+    },
+    {
+      "name": "docs/BUILD.md",
+      "sha256": "83d36e1c68994aa80d29894adb79b7ef3e8594d8bb2916cfc7afcfbd9ee92457",
+      "size": 4492
+    },
+    {
+      "name": "docs/DEPENDENCIES.md",
+      "sha256": "466f8e3dadf1172af3d30a20a38b2968cb89a6c08c31c42008108f54f67a9c85",
+      "size": 2104
+    },
+    {
+      "name": "LICENSE",
+      "sha256": "6cbe493002bfd07c8499debbe928c310333f21bfef862044905ded208ee7b5cb",
+      "size": 1068
+    }
+  ]
+}

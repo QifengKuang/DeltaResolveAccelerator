@@ -1,0 +1,2 @@
+7d32a3a2797aea5186a88059da81fabb32f5cc517fd5951b8d59f74a2bb18d77  DeltaResolveApplication-1.1.1-win-x64.zip
+a4b60250f7e9c481e626e8a44efa5211a73cf476d94c24192f0c42ceb20f4317  application-manifest.json
