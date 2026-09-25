@@ -2,7 +2,8 @@
 # Status remains read-only; Recover never stops a live worker.
 function Test-MnaUiRecoveryInventoryClear {
     param([object]$State)
-    return Test-MnaReleasedSessionInventory -State $State
+    . (Join-Path $PSScriptRoot 'Mna-ReleasedResources.ps1')
+    return (Get-MnaReleasedResourceAssessment -CurrentState $State).Released
 }
 
 function Save-MnaUiRecoveryComparison {
@@ -14,16 +15,16 @@ function Save-MnaUiRecoveryComparison {
         if ($valid) { $before=Read-MnaUiJson $Owner.BeforePath }
     } catch { }
     if (-not $before) {
-        if (-not $PreviousBoot) { throw '上次网络基线缺失或损坏，已保留恢复记录，不能确认恢复完成' }
-        # An old snapshot is diagnostic evidence, not a configuration target for
-        # a different Windows boot. Do not overwrite or fabricate it.
-        $null=Save-TrialNetworkState -State ([pscustomobject]@{RunId=$Owner.RunId;Classification='PreviousBootBaselineUnavailable';OriginalRecordsPreserved=$true}) -Label ui_recovery_comparison
+        # The snapshot is diagnostic evidence, never a configuration target.
+        # Missing evidence cannot resurrect resources that have been released.
+        $classification=if ($PreviousBoot) {'PreviousBootBaselineUnavailable'} else {'BaselineUnavailable'}
+        $null=Save-TrialNetworkState -State ([pscustomobject]@{RunId=$Owner.RunId;Classification=$classification;OriginalRecordsPreserved=$true}) -Label ui_recovery_comparison
         return $null
     }
     try { $comparison=Compare-TrialNetworkState -BaselineState $before -CurrentState $CurrentState }
     catch {
-        if (-not $PreviousBoot) { throw }
-        $comparison=[pscustomobject]@{RunId=$Owner.RunId;Classification='PreviousBootBaselineUnreadable';OriginalRecordsPreserved=$true}
+        $classification=if ($PreviousBoot) {'PreviousBootBaselineUnreadable'} else {'BaselineUnreadable'}
+        $comparison=[pscustomobject]@{RunId=$Owner.RunId;Classification=$classification;OriginalRecordsPreserved=$true}
     }
     $null=Save-TrialNetworkState -State $comparison -Label ui_recovery_comparison
     return [pscustomobject]@{Baseline=$before;Comparison=$comparison}
@@ -102,7 +103,8 @@ function Invoke-MnaUiRecovery {
             # transient inventory failures a bounded retry without changing NICs.
             for ($attempt=0;$attempt -lt 3;$attempt++) {
                 $after=Get-TrialNetworkState
-                $rebootRecovered=Test-MnaRebootSessionReleased -RunId $Record.RunId -Record $Record -Owner $owner -CurrentState $after -BootTime $bootTime
+                $rebootRecovered=(Test-MnaRebootSessionReleased -RunId $Record.RunId -Record $Record -Owner $owner -CurrentState $after -BootTime $bootTime) -and
+                    (Test-MnaUiRecoveryInventoryClear $after)
                 if ($rebootRecovered) { break }
                 if ($attempt -lt 2) { Start-Sleep -Milliseconds 500 }
             }
@@ -146,32 +148,25 @@ function Invoke-MnaUiRecovery {
         if (-not $gameRouteCleanup.ProcessStopped -or @($gameRouteCleanup.Errors).Count) {
             try { $gameRouteCleanup=Stop-MnaGameRouteRecovery -RunId $Record.RunId -OwnedProcesses $trialOwned } catch { }
         }
-        $after=Get-TrialNetworkState
+        $release=Get-MnaUiReleasedResourceState
+        $after=$release.State
         $null=Save-TrialNetworkState -State $after -Label ui_recovery_after
         $null=Save-TrialNetworkState -State $cleanup -Label ui_recovery_cleanup
         $null=Save-TrialNetworkState -State $gameRouteCleanup -Label ui_recovery_game_route
-        if (-not (Test-MnaUiRecoveryInventoryClear $after) -or $null -eq $cleanup.RemainingOwnedProcessCount -or
+        $null=Save-TrialNetworkState -State ([pscustomobject]@{RunId=$Record.RunId;Assessment=$release.Assessment;InventoryAttempts=$release.Attempts;OriginalDifferencesPreserved=$true;FreshBaselineOnNextStart=$true}) -Label ui_recovery_resources
+        if (-not $release.Assessment.Released -or $null -eq $cleanup.RemainingOwnedProcessCount -or
             $cleanup.RemainingOwnedProcessCount -gt 0 -or @($cleanup.Errors).Count -or
             -not $gameRouteCleanup.ProcessStopped -or @($gameRouteCleanup.Errors).Count) {
-            throw '清理尚未完全确认；请查看本地检查记录'
+            throw '本次加速资源尚未完全释放或读取未完成，请稍后重试；检查记录已保留'
         }
         $evidence=Save-MnaUiRecoveryComparison -Owner $owner -CurrentState $after
-        $before=$evidence.Baseline;$comparison=$evidence.Comparison
-        $restored=Test-MnaUiConfigurationRestored $comparison -BaselineState $before -CurrentState $after
-        if ($restored -and -not $comparison.Equal) {
-            . (Join-Path $PSScriptRoot 'Mna-RouterAdvertisementRecovery.ps1')
-            $routeAssessment=Get-MnaUiRouterAdvertisementChanges -Comparison $comparison -BaselineState $before -CurrentState $after
-            if ($routeAssessment -and (@($routeAssessment.RemovedRoutes).Count -or @($routeAssessment.AddedRoutes).Count)) {
-                $null=Save-TrialNetworkState -State ([pscustomobject]@{RunId=$Record.RunId;Classification='RouterAdvertisementRouteChange';LegacyReplacementCount=$routeAssessment.LegacyReplacementCount;OriginalDifferencesPreserved=$true}) -Label ui_recovery_route_origin
-            }
-        }
-        if (-not $restored) { throw '已停止本次进程；网络配置仍有差异或未完整读取，请查看本地记录' }
     } else {
         # A failed start before SDK ownership exists may still leave stale UI JSON.
         # Repair it only after a complete inventory proves no accelerator resources exist.
-        $after=Get-TrialNetworkState
+        $release=Get-MnaUiReleasedResourceState
+        $after=$release.State
         $null=Save-TrialNetworkState -State $after -Label ui_recovery_after
-        if (-not (Test-MnaUiRecoveryInventoryClear $after)) {
+        if (-not $release.Assessment.Released) {
             throw '缺少上次归属记录且未能确认资源已释放，请查看本地检查记录'
         }
     }

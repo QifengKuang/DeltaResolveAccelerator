@@ -28,7 +28,7 @@ function Get-NetRoute { throw '离线验证不读取或修改路由' }
 function New-NetRoute { throw '离线验证禁止修改路由' }
 function Set-DnsClientServerAddress { throw '离线验证禁止修改 DNS' }
 
-$expected=@('Control-Accelerator.ps1','Run-Accelerator.ps1','Mna-UI.Common.ps1','Mna-GameRoute.ps1','Mna-RebootRecovery.ps1','Mna-RouterAdvertisementRecovery.ps1','Mna-SessionRecovery.ps1','Trial-NetworkState.ps1','Trial-RouteOrigin.ps1','Test-UdpStun.ps1','Check-Configuration.ps1')
+$expected=@('Control-Accelerator.ps1','Run-Accelerator.ps1','Mna-UI.Common.ps1','Mna-GameRoute.ps1','Mna-RebootRecovery.ps1','Mna-ReleasedResources.ps1','Mna-RouterAdvertisementRecovery.ps1','Mna-SessionRecovery.ps1','Trial-NetworkState.ps1','Trial-RouteOrigin.ps1','Test-UdpStun.ps1','Check-Configuration.ps1')
 foreach ($name in $expected) {
     $path=Join-Path $backend $name
     $tokens=$null;$parseErrors=$null

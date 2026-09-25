@@ -38,7 +38,7 @@ $commonAst=[Management.Automation.Language.Parser]::ParseFile((Join-Path $backen
 if (@($parseErrors).Count) { throw '后端公共函数语法检查失败' }
 $commonParts=[Collections.Generic.List[string]]::new()
 $commonParts.Add('$script:MnaUiRoot=$PSScriptRoot; $script:MnaUiOwnershipSaved=@{}')
-foreach ($name in @('Get-MnaUiPaths','Get-MnaRunFile','Read-MnaUiJson','Write-MnaUiJson','Write-MnaUiStatus','Get-MnaUiStatus','Save-MnaUiOwnership','ConvertTo-MnaUiOperationTime','Protect-MnaTrialMessage','Initialize-MnaUiRuntimeVariables','Assert-MnaUiPreviousRunClear')) {
+foreach ($name in @('Get-MnaUiPaths','Get-MnaRunFile','Read-MnaUiJson','Write-MnaUiJson','Write-MnaUiStatus','Get-MnaUiStatus','Save-MnaUiOwnership','ConvertTo-MnaUiOperationTime','Protect-MnaTrialMessage','Initialize-MnaUiRuntimeVariables','Assert-MnaUiPreviousRunClear','Get-MnaUiReleasedResourceState')) {
     $definitions=@($commonAst.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst]},$false) | Where-Object Name -eq $name)
     if ($definitions.Count -ne 1) { throw ('后端函数未唯一找到：'+$name) }
     $commonParts.Add($definitions[0].Extent.Text)
@@ -125,7 +125,7 @@ function Stop-MnaGameRouteRecovery {
 function New-RecoveryFixture([string]$Name,[switch]$Owner,[switch]$NoWorker,[string]$Phase='error') {
     $root=Join-Path $fixtureRoot $Name
     $null=[IO.Directory]::CreateDirectory($root)
-    foreach ($file in @('Control-Accelerator.ps1','Mna-SessionRecovery.ps1','Mna-RebootRecovery.ps1','Mna-RouterAdvertisementRecovery.ps1')) { Copy-Item -LiteralPath (Join-Path $backend $file) -Destination (Join-Path $root $file) }
+    foreach ($file in @('Control-Accelerator.ps1','Mna-SessionRecovery.ps1','Mna-RebootRecovery.ps1','Mna-ReleasedResources.ps1','Mna-RouterAdvertisementRecovery.ps1')) { Copy-Item -LiteralPath (Join-Path $backend $file) -Destination (Join-Path $root $file) }
     [IO.File]::WriteAllText((Join-Path $root 'Mna-UI.Common.ps1'),($commonParts -join "`n"))
     [IO.File]::WriteAllText((Join-Path $root 'Trial-NetworkState.ps1'),$networkMock)
     [IO.File]::WriteAllText((Join-Path $root 'Mna-GameRoute.ps1'),$gameRouteMock)
@@ -185,14 +185,14 @@ function Set-PreviousBootFixture($Scenario) {
     $Scenario.Network.Data.IPAddresses=@([pscustomobject]@{InterfaceAlias='New Wi-Fi';InterfaceIndex=17;IPAddress='169.254.20.30';AddressFamily='IPv4';PrefixLength=16})
     $Scenario.Network.Data.ActiveRoutes=@([pscustomobject]@{InterfaceAlias='New Wi-Fi';InterfaceIndex=17;AddressFamily='IPv4';DestinationPrefix='0.0.0.0/0';NextHop='192.0.2.1';RouteMetric=55})
     $Scenario.Network.Data.DNS=@([pscustomobject]@{InterfaceAlias='New Wi-Fi';InterfaceIndex=17;ServerAddresses=@('192.0.2.99')})
-    $Scenario.Network.Data.WinINETProxy=@([pscustomobject]@{ProxyEnable=1;ProxyServer='fixture-proxy:8080'})
+    $Scenario.Network.Data.WinINETProxy=@([pscustomobject]@{ProxyEnable=1;ProxyServer='fixture-proxy:8080';CurrentUserConfiguration=[pscustomobject]@{Proxy='fixture-proxy:8080';AutoConfigURL=$null}})
     $Scenario.Network.Data.WinHTTPProxy=@([pscustomobject]@{AccessType=3;Proxy='fixture-proxy:8081'})
 }
 function Assert-NoOldProcessCleanup($Scenario) {
     Assert-Recovery (-not $Scenario.Events.Contains('cleanup-sdk') -and -not $Scenario.Events.Contains('cleanup-route')) '旧 boot 会话不得操作旧 PID 或旧 REST endpoint'
     Assert-Recovery (-not $Scenario.Events.Contains('classify-normal')) '跨 boot 释放不要求旧主机网络相等'
 }
-function Invoke-FixtureRunBeforeSdk($Scenario) {
+function Invoke-FixtureRunBeforeSdk($Scenario,[string]$ExpectedFailure='fixture stopped before SDK startup') {
     # Execute the production worker through its real fresh-baseline checkpoint.
     # Only the two Windows elevation prerequisite statements are omitted from
     # this fixture copy. Get-Process then deliberately stops it before SDK,
@@ -217,7 +217,7 @@ function Invoke-FixtureRunBeforeSdk($Scenario) {
     finally { $Scenario.RunCheckpoint=$false }
     Assert-Recovery ($Scenario.SavedPaths.ContainsKey('ui_before')) '真实 Run 在 SDK 前持久化全新基线'
     $connection=Read-FixtureJson $Scenario.SavedPaths.ui_connection
-    Assert-Recovery ($connection.Failure -match 'fixture stopped before SDK startup') '真实 Run 确实停在 SDK、设备密钥和网络访问之前'
+    Assert-Recovery ($connection.Failure.Contains($ExpectedFailure)) '真实 Run 确实停在 SDK、设备密钥和网络访问之前'
 }
 function Save-FixtureConnectedSession($Scenario) {
     $fixtureScenario=$Scenario
@@ -294,7 +294,29 @@ try {
         $result=Invoke-RecoveryControl $case Stop
         Assert-Recovery ($result.phase -eq 'stopped' -and $case.Events.Contains('inventory')) 'Force Stop 不走幂等快速返回'
     }
-    foreach ($damage in @('worker-json','worker-run-id','owner-json','owner-run-id','owner-runtime','owner-root-pid','owner-root-created','owner-owned-empty','owner-owned-pid','owner-owned-created','baseline-json','baseline-missing','baseline-outside')) {
+    Test-RecoveryCase '已完成记录后新出现残留，Start 不覆盖旧 pointer' {
+        $case=New-RecoveryFixture 'stopped-new-residue' -Owner -Phase stopped
+        $case.Network.Data.Adapters=@([pscustomobject]@{Name='mna_game_aaaaaa';ifIndex=99})
+        Assert-RecoveryRejected $case Start
+        Assert-Recovery (-not $case.Events.Contains('configuration')) '资源检查先于启动配置与新 pointer'
+    }
+    Test-RecoveryCase 'worker 在控制预检后再次检查残留，未读取密钥或启动 SDK' {
+        $case=New-RecoveryFixture 'worker-preflight-residue' -NoWorker
+        Remove-Item -LiteralPath $case.Status
+        $started=Invoke-RecoveryControl $case Start
+        Assert-Recovery ($started.phase -eq 'starting') '控制预检时清单为空'
+        $case.Network.Data.Adapters=@([pscustomobject]@{Name='mna_game_aaaaaa';ifIndex=99})
+        Invoke-FixtureRunBeforeSdk $case '开启前检查发现加速资源残留'
+        Assert-Recovery ((Read-FixtureJson $case.Status).phase -eq 'error') 'worker 二次预检拦截残留'
+    }
+    Test-RecoveryCase '跨重启 PAC 指向旧 SDK 端口不能放行' {
+        $case=New-RecoveryFixture 'reboot-proxy-pac' -Owner
+        Set-PreviousBootFixture $case
+        $case.Network.Data.WinINETProxy[0].CurrentUserConfiguration.AutoConfigURL='http://127.0.0.1:9801/proxy.pac'
+        Assert-RecoveryRejected $case
+        Assert-NoOldProcessCleanup $case
+    }
+    foreach ($damage in @('worker-json','worker-run-id','owner-json','owner-run-id','owner-runtime','owner-root-pid','owner-root-created','owner-owned-empty','owner-owned-pid','owner-owned-created')) {
         Test-RecoveryCase ('损坏 '+$damage+' 拒绝且保留证据') {
             $case=New-RecoveryFixture $damage -Owner
             switch ($damage) {
@@ -316,7 +338,7 @@ try {
             if ($damage -match '^(worker|owner)-') { Assert-Recovery (-not $case.Events.Contains('cleanup-sdk') -and -not $case.Events.Contains('cleanup-route')) '归属损坏不清理资源' }
         }
     }
-    foreach ($failure in @('route-errors','route-process-live','route-throws','sdk-errors','sdk-process-live','sdk-count-unknown','inventory-incomplete','network-difference')) {
+    foreach ($failure in @('route-errors','route-process-live','route-throws','sdk-errors','sdk-process-live','sdk-count-unknown','inventory-incomplete','owned-resources')) {
         Test-RecoveryCase ('Start 遇 '+$failure+' 不成功、不覆写旧 pointer') {
             $case=New-RecoveryFixture $failure -Owner
             switch ($failure) {
@@ -327,7 +349,7 @@ try {
                 'sdk-process-live' { $case.Cleanup.RemainingOwnedProcessCount=1 }
                 'sdk-count-unknown' { $case.Cleanup.RemainingOwnedProcessCount=$null }
                 'inventory-incomplete' { $case.Network.Complete=$false }
-                'network-difference' { $case.Restored=$false }
+                'owned-resources' { $case.Network.Data.Adapters=@([pscustomobject]@{Name='mna_game_aaaaaa';ifIndex=99}) }
             }
             Assert-RecoveryRejected $case Start
             Assert-Recovery (-not $case.Events.Contains('configuration')) '恢复失败先于新连接配置检查'
@@ -352,6 +374,49 @@ try {
             }
             Assert-RecoveryRejected $case
             Assert-Recovery (-not $case.Events.Contains('cleanup-sdk')) '不清理无归属资源'
+        }
+    }
+    Test-RecoveryCase '同一 boot 外部网络变化不阻止释放，下一 Start 使用新基线' {
+        $case=New-RecoveryFixture 'same-boot-dynamic' -Owner
+        $boot=$case.BootTime
+        Set-PreviousBootFixture $case
+        $case.BootTime=$boot
+        $oldBaseline=Get-FixtureText $case.Baseline
+        $result=Invoke-RecoveryControl $case
+        Assert-Recovery ($result.phase -eq 'stopped') '同一 boot 外部地址、路由、网卡、DNS、代理变化允许结束'
+        Assert-Recovery ($case.Events.Contains('cleanup-sdk') -and $case.Events.Contains('cleanup-route')) '仍执行本会话清理'
+        $diff=Read-FixtureJson $case.SavedPaths.ui_recovery_comparison
+        $release=Read-FixtureJson $case.SavedPaths.ui_recovery_resources
+        Assert-Recovery ($diff.Equal -eq $false -and $release.Assessment.Released -eq $true) '差异真实保留，资源释放独立判定'
+        Assert-Recovery ((Get-FixtureText $case.Baseline) -ceq $oldBaseline) '原始快照不被改写'
+        $started=Invoke-RecoveryControl $case Start
+        Assert-Recovery ($started.phase -eq 'starting') '动态恢复后能再次开启'
+        Invoke-FixtureRunBeforeSdk $case
+        $fresh=Read-FixtureJson $case.SavedPaths.ui_before
+        Assert-Recovery ($fresh.Data.DNS[0].ServerAddresses[0] -eq '192.0.2.99') '真实 worker 采集当前 DNS 作为新基线'
+    }
+    Test-RecoveryCase '同一 boot 暂态清单不完整会重读当前状态' {
+        $case=New-RecoveryFixture 'same-boot-retry' -Owner
+        $pending=($case.Network | ConvertTo-Json -Depth 20 | ConvertFrom-Json)
+        $pending.Complete=$false
+        $case.InventoryQueue.Enqueue($pending)
+        $result=Invoke-RecoveryControl $case
+        Assert-Recovery ($result.phase -eq 'stopped' -and $case.Events.Contains('wait-250')) '短暂失败重试后恢复'
+        $release=Read-FixtureJson $case.SavedPaths.ui_recovery_resources
+        Assert-Recovery ($release.InventoryAttempts -eq 2) '保存重读次数'
+    }
+    foreach ($damage in @('missing','corrupt','outside')) {
+        Test-RecoveryCase ('同一 boot 旧诊断快照 '+$damage+' 不阻止当前资源释放') {
+            $case=New-RecoveryFixture ('diagnostic-'+$damage) -Owner
+            switch ($damage) {
+                'missing' { Remove-Item -LiteralPath $case.Baseline }
+                'corrupt' { [IO.File]::WriteAllText($case.Baseline,'{broken') }
+                'outside' { $owner=Read-FixtureJson $case.Owner;$owner.BeforePath=Join-Path $case.Root 'not-a-baseline.json';Write-FixtureJson $case.Owner $owner }
+            }
+            $result=Invoke-RecoveryControl $case
+            Assert-Recovery ($result.phase -eq 'stopped') '仅依靠当前清单和清理结果结束会话'
+            $diagnostic=Read-FixtureJson $case.SavedPaths.ui_recovery_comparison
+            Assert-Recovery ($diagnostic.Classification -eq 'BaselineUnavailable') '诊断缺失明确记录'
         }
     }
     Test-RecoveryCase '真实旧 boot 身份及当次全量快照可释放会话，独立网络变化仅留诊断' {

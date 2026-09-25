@@ -468,6 +468,13 @@ function Assert-MnaUiPreviousRunClear {
     if (Get-Process -Name linkboost,linkboost-core,multipath-helper,mp-speeder -ErrorAction SilentlyContinue) {
         throw '已有 SDK 进程运行，未覆盖上次恢复记录；请先结束已有连接'
     }
+    # A durable stopped status belongs to the previous run, not to today's
+    # inventory. Verify again before replacing the only current-run pointer.
+    . (Join-Path $PSScriptRoot 'Trial-NetworkState.ps1')
+    $release=Get-MnaUiReleasedResourceState
+    if (-not $release.Assessment.Released) {
+        throw '开启前检查发现加速资源残留或读取未完成，已保留原运行记录，请稍后重试'
+    }
 }
 
 function Test-MnaUiWorker {
@@ -723,6 +730,22 @@ function Get-MnaUiDisconnectedDhcpChanges {
     return $allowed
 }
 
+function Get-MnaUiReleasedResourceState {
+    param([object]$BaselineState)
+    . (Join-Path $PSScriptRoot 'Mna-ReleasedResources.ps1')
+    # Windows removes TUN state asynchronously. Re-read current resources with
+    # bounded backoff, never require the rest of the host to match an old image.
+    for ($attempt=1;$attempt -le 3;$attempt++) {
+        $state=Get-TrialNetworkState
+        $assessment=Get-MnaReleasedResourceAssessment -CurrentState $state -BaselineState $BaselineState
+        if ($assessment.Released -or $attempt -eq 3) { break }
+        Start-Sleep -Milliseconds (250*$attempt)
+    }
+    return [pscustomobject]@{State=$state;Assessment=$assessment;Attempts=$attempt}
+}
+
+# Legacy snapshot classifier retained for diagnostic/offline compatibility.
+# Session completion is decided by Get-MnaUiReleasedResourceState instead.
 function Test-MnaUiConfigurationRestored {
     param([Parameter(Mandatory)][object]$Comparison,[object]$BaselineState,[object]$CurrentState)
     if (-not $Comparison.FullyComparable) { return $false }

@@ -5,6 +5,7 @@ $ErrorActionPreference='Stop'
 $RoutingMode='ResolveOnly'
 . (Join-Path $PSScriptRoot 'Mna-UI.Common.ps1')
 . (Join-Path $PSScriptRoot 'Trial-NetworkState.ps1')
+. (Join-Path $PSScriptRoot 'Mna-ReleasedResources.ps1')
 . (Join-Path $PSScriptRoot 'Mna-GameRoute.ps1')
 . Initialize-MnaUiRuntimeVariables
 $uiPaths=Get-MnaUiPaths
@@ -45,6 +46,8 @@ try {
     $uiBeforePath=Save-TrialNetworkState -State $uiBefore -Label ui_before
     $uiRecord.BeforePath=$uiBeforePath
     if (-not $uiBefore.Complete) { throw '无法完整读取网络基线，未启动连接' }
+    $preflight=Get-MnaReleasedResourceAssessment -CurrentState $uiBefore
+    if (-not $preflight.Released) { throw '开启前检查发现加速资源残留或读取未完成，未启动连接' }
     if (Get-Process -Name linkboost,linkboost-core,multipath-helper,mp-speeder -ErrorAction SilentlyContinue) { throw '已有 SDK 进程运行，本次未接管；请先结束现有测试' }
     if (@(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object {$_.LocalPort -in @(9801,12345,9803)}).Count -or
         @(Get-NetUDPEndpoint -ErrorAction Stop | Where-Object {$_.LocalPort -in @(9801,12345,9803)}).Count) { throw '本地测试端口已被占用，本次未启动' }
@@ -237,22 +240,20 @@ try {
             if ($uiStartClient) { try { $uiStartClient.Dispose() } catch { };$uiStartClient=$null }
             try { Write-MnaUiStatus -Phase stopping -Message '正在检查网络恢复情况…' -RunId $RunId -RoutingMode $RoutingMode -ProgressStage '检查网络恢复情况' } catch { }
             try {
-                $after=Get-TrialNetworkState
+                $release=Get-MnaUiReleasedResourceState -BaselineState $uiBefore
+                $after=$release.State
+                $uiRecord.ResourceRelease=$release.Assessment
+                $uiRecord.SettlingChecks=$release.Attempts-1
+                $uiRecord.NetworkResourcesReleased=$release.Assessment.Released
+                if (-not $release.Assessment.Released) { $uiFailure=($uiFailure+'；本次加速资源尚未完全释放或读取未完成，请稍后重试').Trim('；') }
                 if ($uiBefore) {
                     $diff=Compare-TrialNetworkState -BaselineState $uiBefore -CurrentState $after
-                    $settlingChecks=0
-                    while ((-not (Test-MnaUiConfigurationRestored $diff -BaselineState $uiBefore -CurrentState $after)) -and $settlingChecks -lt 2) {
-                        Start-Sleep -Milliseconds 300
-                        $after=Get-TrialNetworkState
-                        $diff=Compare-TrialNetworkState -BaselineState $uiBefore -CurrentState $after
-                        $settlingChecks++
-                    }
-                    $uiRecord.SettlingChecks=$settlingChecks
                     $uiRecord.ComparisonPath=Save-TrialNetworkState -State $diff -Label ui_comparison
                     $uiRecord.NetworkFullyComparable=$diff.FullyComparable
                     $uiRecord.NetworkEqual=$diff.Equal
-                    $uiRecord.NetworkConfigurationEqual=Test-MnaUiConfigurationRestored $diff -BaselineState $uiBefore -CurrentState $after
-                    if (-not $uiRecord.NetworkConfigurationEqual) { $uiFailure=($uiFailure+'；网络配置存在差异或未完整读取，请查看本地记录').Trim('；') }
+                    # Equality is diagnostic only. External applications and
+                    # Windows own their network state throughout this session.
+                    $uiRecord.NetworkConfigurationEqual=$diff.Equal
                 }
                 $uiRecord.AfterPath=Save-TrialNetworkState -State $after -Label ui_after
             } catch { $uiFailure=($uiFailure+'；结束后的网络检查失败').Trim('；') }
@@ -268,7 +269,7 @@ try {
             catch { $uiFailure=($uiFailure+'；报告写入失败').Trim('；') }
             try {
                 if ($uiFailure) { Write-MnaUiStatus -Phase error -Message $uiFailure -RunId $RunId -RoutingMode $RoutingMode }
-                else { Write-MnaUiStatus -Phase stopped -Message $(if ($uiExpired) {'本次免费试用已到期，本机加速已关闭；请核对腾讯云服务状态'} elseif ($uiRecord.NetworkEqual -eq $false) {'加速器已关闭；网卡自动状态变化已记录'} else {'加速器已关闭'}) -RunId $RunId -RoutingMode $RoutingMode }
+                else { Write-MnaUiStatus -Phase stopped -Message $(if ($uiExpired) {'本次免费试用已到期，本机加速已关闭；请核对腾讯云服务状态'} elseif ($uiRecord.NetworkEqual -eq $false) {'加速器已关闭；当前网络变化已记录'} else {'加速器已关闭'}) -RunId $RunId -RoutingMode $RoutingMode }
             } catch { } # A subsequent read-only Status reports the exited worker as an error.
         }
     } finally {
