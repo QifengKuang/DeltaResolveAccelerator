@@ -116,6 +116,10 @@ namespace DeltaResolveAccelerator
         internal static readonly Color Teal = Color.FromArgb(46, 105, 76);
         internal static readonly Color Mint = Color.FromArgb(229, 241, 224);
         internal static readonly Color DarkTeal = Color.FromArgb(35, 82, 61);
+        internal static readonly Color IdleSurface = Color.FromArgb(235, 235, 235);
+        internal static readonly Color IdleGradient = Color.FromArgb(246, 246, 246);
+        internal static readonly Color IdleText = Color.FromArgb(51, 51, 51);
+        internal static readonly Color IdleMuted = Color.FromArgb(112, 112, 112);
         internal static readonly Color Error = Color.FromArgb(170, 64, 53);
         internal static readonly Color Amber = Color.FromArgb(140, 103, 37);
         internal static Font Font(float size, bool bold)
@@ -193,6 +197,7 @@ namespace DeltaResolveAccelerator
     internal sealed class FlatButton : Button
     {
         internal bool Primary;
+        internal bool Neutral;
         private bool hover;
         internal FlatButton()
         {
@@ -218,10 +223,12 @@ namespace DeltaResolveAccelerator
             Color fill = Primary ? Palette.Teal : Palette.Raised;
             if (!Enabled) fill = Color.FromArgb(220, 230, 219);
             else if (hover) fill = Primary ? Palette.DarkTeal : Color.FromArgb(222, 232, 220);
+            if (Neutral) fill = !Enabled ? Color.FromArgb(217, 217, 217) : hover ? Color.FromArgb(76, 76, 76) : Color.FromArgb(96, 96, 96);
             using (GraphicsPath path = Palette.Rounded(new RectangleF(.5f, .5f, Width - 1, Height - 1), 13 * Palette.Scale(this)))
             using (Brush brush = new SolidBrush(fill))
             { e.Graphics.FillPath(brush, path); }
             Color text = Primary && Enabled ? Palette.Card : (Enabled ? Palette.Text : Palette.Muted);
+            if (Neutral) text = Enabled ? Color.White : Palette.IdleMuted;
             TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, text,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             if (Focused && ShowFocusCues)
@@ -334,32 +341,35 @@ namespace DeltaResolveAccelerator
             // All illustration geometry shares one coordinate space, including at high DPI.
             g.ScaleTransform(Width / 244f, Height / 226f);
             float cx = 122, cy = 108;
-            using (Brush halo = new SolidBrush(Color.FromArgb(45, 255, 255, 253)))
+            Color accent = Connected ? Palette.Teal : Palette.IdleMuted;
+            Color nodeColor = Connected ? Color.FromArgb(139, 171, 130) : Color.FromArgb(158, 158, 158);
+            using (Brush halo = new SolidBrush(Connected ? Color.FromArgb(45, 255, 255, 253) : Color.FromArgb(45, 255, 255, 255)))
                 g.FillEllipse(halo, 13, 0, 218, 218);
-            using (Pen ring = new Pen(Color.FromArgb(92, 181, 201, 174), 1))
+            using (Pen ring = new Pen(Connected ? Color.FromArgb(92, 181, 201, 174) : Color.FromArgb(92, 178, 178, 178), 1))
             {
                 g.DrawEllipse(ring, cx - 100, cy - 100, 200, 200);
                 g.DrawEllipse(ring, cx - 79, cy - 79, 158, 158);
             }
-            using (Brush shadow = new SolidBrush(Color.FromArgb(18, 68, 102, 66)))
+            using (Brush shadow = new SolidBrush(Connected ? Color.FromArgb(18, 68, 102, 66) : Color.FromArgb(18, 80, 80, 80)))
                 g.FillEllipse(shadow, cx - 59, cy - 55, 118, 118);
             using (Brush disc = new LinearGradientBrush(new RectangleF(cx - 58, cy - 58, 116, 116),
-                Color.FromArgb(254, 255, 250), Color.FromArgb(237, 247, 230), 65f))
+                Connected ? Color.FromArgb(254, 255, 250) : Color.White,
+                Connected ? Color.FromArgb(237, 247, 230) : Color.FromArgb(230, 230, 230), 65f))
                 g.FillEllipse(disc, cx - 58, cy - 58, 116, 116);
-            using (Pen symbol = new Pen(Palette.Teal, 4))
+            using (Pen symbol = new Pen(accent, 4))
             {
                 symbol.StartCap = symbol.EndCap = LineCap.Round; symbol.LineJoin = LineJoin.Round;
                 g.DrawLines(symbol, new PointF[] { new PointF(cx - 22, cy + 14), new PointF(cx, cy - 25),
                     new PointF(cx + 22, cy + 14), new PointF(cx - 22, cy + 14) });
             }
-            using (Brush dot = new SolidBrush(Palette.Teal)) g.FillEllipse(dot, cx - 3, cy + 1, 6, 6);
+            using (Brush dot = new SolidBrush(accent)) g.FillEllipse(dot, cx - 3, cy + 1, 6, 6);
             if (Waiting)
             {
-                using (Pen spinner = new Pen(Palette.Teal, 2.5f))
+                using (Pen spinner = new Pen(accent, 2.5f))
                 { spinner.StartCap = spinner.EndCap = LineCap.Round; g.DrawArc(spinner, cx - 79, cy - 79, 158, 158, AnimationPhase * 360, 82); }
             }
-            DrawNode(g, new PointF(202, 48), Connected ? Palette.Teal : Color.FromArgb(139, 171, 130), 4);
-            DrawNode(g, new PointF(52, 175), Color.FromArgb(139, 171, 130), 3);
+            DrawNode(g, new PointF(202, 48), Connected ? Palette.Teal : nodeColor, 4);
+            DrawNode(g, new PointF(52, 175), nodeColor, 3);
             g.Restore(saved);
         }
         private static void DrawNode(Graphics g, PointF point, Color color, float radius)
@@ -526,6 +536,8 @@ namespace DeltaResolveAccelerator
         private readonly FlatButton checkUpdatesButton = new FlatButton();
         private readonly FlatButton repairShortcutButton = new FlatButton();
         private readonly MintToggle automaticUpdates = new MintToggle();
+        private readonly MintToggle launchAtStartup = new MintToggle();
+        private readonly Label startupHint = MakeLabel("登录 Windows 后自动打开，打开后手动开启加速。", 9, false, Palette.Muted);
         private readonly Label softwareStatus = MakeLabel("", 9, false, Palette.Muted);
         private readonly List<GamePathRow> gameRows = new List<GamePathRow>();
         private readonly ToolTip pathToolTip = new ToolTip();
@@ -547,6 +559,8 @@ namespace DeltaResolveAccelerator
         private bool startedThisSession;
         private bool initialStatusPending;
         private bool softwareTabOpen, findingGames, softwareBusy, updatingPreference;
+        private bool startupBusy, updatingStartupPreference, startupEnabled, startupPreferenceKnown;
+        private Task startupOperation = Task.FromResult(0);
         private Dictionary<string, string> configuredPlatforms = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private byte[] importedKey;
 
@@ -612,7 +626,7 @@ namespace DeltaResolveAccelerator
             body.Controls.Add(dashboard); body.Controls.Add(settings);
 
             hero.SetBounds(0, 0, 804, 276); hero.Anchor = AnchorStyles.Left | AnchorStyles.Top | AnchorStyles.Right;
-            hero.Fill = Palette.Mint; hero.GradientEnd = Color.FromArgb(240, 246, 230); hero.Radius = 26;
+            hero.Fill = Palette.IdleSurface; hero.GradientEnd = Palette.IdleGradient; hero.Radius = 26;
             dashboard.Controls.Add(hero);
             Label eyebrow = MakeLabel("连接状态", 9, false, Palette.Muted);
             eyebrow.SetBounds(28, 23, 250, 26); hero.Controls.Add(eyebrow);
@@ -623,7 +637,7 @@ namespace DeltaResolveAccelerator
             stateTitle.SetBounds(26, 59, 470, 64); hero.Controls.Add(stateTitle);
             stateMessage = MakeLabel("开启后，主入口解析经香港，对局流量保持直连。", 10, false, Palette.Muted);
             stateMessage.SetBounds(29, 126, 472, 58); hero.Controls.Add(stateMessage);
-            primary.Primary = true; primary.Text = "开启加速";
+            primary.Primary = true; primary.Neutral = true; primary.Text = "开启加速";
             primary.SetBounds(28, 204, 206, 48);
             primary.Click += async delegate { await ToggleAsync(); }; hero.Controls.Add(primary);
             connectionDetail = MakeLabel("只优化入口解析", 9, false, Palette.Muted);
@@ -707,9 +721,9 @@ namespace DeltaResolveAccelerator
                 configuredGamePaths.Add(@"D:\SteamLibrary\steamapps\common\Delta Force\Game\DeltaForce\Binaries\Win64\DeltaForceClient-Win64-Shipping.exe");
                 string requested = (previewState ?? "stopped").ToLowerInvariant();
                 settingsOpen = requested == "setup" || requested == "settings" || requested == "software";
-                state.Phase = requested == "connected" ? "connected" : requested == "error" ? "error" : requested == "starting" ? "starting" : requested == "stopping" ? "stopping" : "stopped";
-                initialStatusPending = requested == "checking";
-                state.Ready = state.Phase == "connected";
+                state.Phase = requested == "connected" || requested == "connected-unready" || requested == "checking-connected" ? "connected" : requested == "error" ? "error" : requested == "starting" ? "starting" : requested == "stopping" ? "stopping" : "stopped";
+                initialStatusPending = requested == "checking" || requested == "checking-connected";
+                state.Ready = state.Phase == "connected" && requested != "connected-unready";
                 state.Message = state.Phase == "error" ? "暂时无法连接香港解析服务。请检查网络后重试。" : "";
                 if (state.Phase == "starting")
                 {
@@ -793,6 +807,7 @@ namespace DeltaResolveAccelerator
             importKeyButton.Left = content - Px(160);
             settingsError.Width = width - Px(58);
             softwareStatus.Width = content;
+            launchAtStartup.Width = automaticUpdates.Width = startupHint.Width = content;
             repairShortcutButton.Left = content - Px(176);
         }
         private sealed class GamePathRow
@@ -857,20 +872,31 @@ namespace DeltaResolveAccelerator
         {
             Label version = MakeLabel("三角洲加速器  " + Application.ProductVersion, 16, true, Palette.Text);
             version.SetBounds(0, 0, 730, 34); softwareSettingsPanel.Controls.Add(version);
+            launchAtStartup.Text = "开机自启动"; launchAtStartup.Font = Palette.Font(10, true);
+            launchAtStartup.AccessibleName = "开机自启动";
+            launchAtStartup.ForeColor = Palette.Text; launchAtStartup.BackColor = Palette.Card;
+            launchAtStartup.SetBounds(0, 42, 730, 29); softwareSettingsPanel.Controls.Add(launchAtStartup);
+            startupHint.SetBounds(0, 75, 746, 27); startupHint.AutoEllipsis = true;
+            softwareSettingsPanel.Controls.Add(startupHint);
+            launchAtStartup.CheckedChanged += async delegate
+            {
+                if (preview || updatingStartupPreference || startupBusy || closing || !startupPreferenceKnown) return;
+                startupOperation = ChangeStartupPreferenceAsync();
+                await startupOperation;
+            };
             automaticUpdates.Text = "自动检查更新"; automaticUpdates.Font = Palette.Font(10, true);
             automaticUpdates.ForeColor = Palette.Text; automaticUpdates.BackColor = Palette.Card;
-            automaticUpdates.SetBounds(0, 56, 730, 29); softwareSettingsPanel.Controls.Add(automaticUpdates);
+            automaticUpdates.SetBounds(0, 114, 730, 29); softwareSettingsPanel.Controls.Add(automaticUpdates);
             Label updateNote = MakeLabel("启动时检查新版本，更新就绪后将在下次启动时安装。", 9, false, Palette.Muted);
-            updateNote.SetBounds(0, 91, 730, 27); softwareSettingsPanel.Controls.Add(updateNote);
+            updateNote.SetBounds(0, 146, 730, 27); softwareSettingsPanel.Controls.Add(updateNote);
             checkUpdatesButton.Text = "检查更新"; checkUpdatesButton.Primary = true;
-            checkUpdatesButton.SetBounds(0, 133, 170, 38); softwareSettingsPanel.Controls.Add(checkUpdatesButton);
+            checkUpdatesButton.SetBounds(0, 184, 170, 38); softwareSettingsPanel.Controls.Add(checkUpdatesButton);
             checkUpdatesButton.Click += async delegate { await CheckSoftwareUpdateAsync(); };
-            softwareStatus.SetBounds(0, 181, 746, 44); softwareStatus.AutoEllipsis = true; softwareSettingsPanel.Controls.Add(softwareStatus);
-            Label shortcutTitle = MakeLabel("桌面快捷方式", 11, true, Palette.Text);
-            shortcutTitle.SetBounds(0, 245, 520, 28); softwareSettingsPanel.Controls.Add(shortcutTitle);
-            Label shortcutHint = MakeLabel("重新建立桌面和开始菜单入口，之后更新可继续使用同一个快捷方式。", 9, false, Palette.Muted);
-            shortcutHint.SetBounds(0, 285, 730, 44); softwareSettingsPanel.Controls.Add(shortcutHint);
-            repairShortcutButton.Text = "修复快捷方式"; repairShortcutButton.SetBounds(570, 241, 176, 38);
+            softwareStatus.SetBounds(0, 229, 746, 40); softwareStatus.AutoEllipsis = true; softwareSettingsPanel.Controls.Add(softwareStatus);
+            Label shortcutTitle = MakeLabel("桌面与开始菜单", 11, true, Palette.Text);
+            shortcutTitle.SetBounds(0, 285, 500, 28); softwareSettingsPanel.Controls.Add(shortcutTitle);
+            repairShortcutButton.Text = "修复快捷方式"; repairShortcutButton.SetBounds(570, 280, 176, 38);
+            pathToolTip.SetToolTip(repairShortcutButton, "重新建立桌面和开始菜单入口，之后更新可继续使用同一个快捷方式。");
             repairShortcutButton.Click += async delegate { await RepairShortcutAsync(); }; softwareSettingsPanel.Controls.Add(repairShortcutButton);
             automaticUpdates.CheckedChanged += delegate
             {
@@ -889,6 +915,63 @@ namespace DeltaResolveAccelerator
             }
             catch { softwareStatus.Text = "无法读取更新状态，请稍后重试。"; }
             finally { updatingPreference = false; }
+            if (!startupBusy && !closing) startupOperation = RefreshStartupPreferenceAsync();
+        }
+        private void ShowStartupPreference()
+        {
+            updatingStartupPreference = true;
+            try { launchAtStartup.Checked = startupEnabled; }
+            finally { updatingStartupPreference = false; }
+            launchAtStartup.Enabled = startupPreferenceKnown && !startupBusy && !closing;
+        }
+        private async Task RefreshStartupPreferenceAsync()
+        {
+            startupBusy = true; launchAtStartup.Enabled = false;
+            startupHint.ForeColor = Palette.Muted;
+            startupHint.Text = preview ? "登录 Windows 后自动打开，打开后手动开启加速。" : "正在读取开机自启动设置…";
+            try
+            {
+                startupEnabled = !preview && await Task.Run(delegate { return StartupManager.IsEnabled(root); });
+                startupPreferenceKnown = true;
+                startupHint.Text = "登录 Windows 后自动打开，打开后手动开启加速。";
+            }
+            catch
+            {
+                startupPreferenceKnown = false;
+                startupHint.ForeColor = Palette.Error;
+                startupHint.Text = "无法读取开机自启动设置，请重新打开“软件”页面重试。";
+            }
+            finally { startupBusy = false; if (!IsDisposed) ShowStartupPreference(); }
+        }
+        private async Task ChangeStartupPreferenceAsync()
+        {
+            bool requested = launchAtStartup.Checked;
+            startupBusy = true; launchAtStartup.Enabled = false;
+            startupHint.ForeColor = Palette.Muted; startupHint.Text = "正在保存开机自启动设置…";
+            try
+            {
+                Exception failure = null;
+                try { await Task.Run(delegate { StartupManager.SetEnabled(root, requested); }); }
+                catch (Exception ex) { failure = ex; }
+                if (failure == null)
+                {
+                    startupEnabled = requested; startupPreferenceKnown = true;
+                    startupHint.Text = requested ? "已开启：登录 Windows 后自动打开，打开后手动开启加速。" : "已关闭开机自启动，可随时重新开启。";
+                }
+                else
+                {
+                    // Registration may have completed before a readback/timeout failure. Read the actual state again.
+                    try { startupEnabled = await Task.Run(delegate { return StartupManager.IsEnabled(root); }); startupPreferenceKnown = true; }
+                    catch { startupPreferenceKnown = false; }
+                    startupHint.ForeColor = Palette.Error;
+                    startupHint.Text = "设置未完成：" + Short(failure.Message, 140);
+                }
+            }
+            finally
+            {
+                startupBusy = false;
+                if (!IsDisposed) { ShowStartupPreference(); pathToolTip.SetToolTip(startupHint, startupHint.Text); }
+            }
         }
         private void SelectSettingsTab(bool software, bool refresh = true)
         {
@@ -1190,6 +1273,9 @@ namespace DeltaResolveAccelerator
                 displayScale = displayScale, minimumWidth = MinimumSize.Width, minimumHeight = MinimumSize.Height,
                 maximumWidth = MaximumSize.Width, maximumHeight = MaximumSize.Height, resizeChecks = resizeChecks,
                 grips = grips, nativeCaption = (style & 0x00c00000) != 0, nativeThickFrame = (style & 0x00040000) != 0,
+                connectionReady = state.Ready, checkingConnection = initialStatusPending, connectionArtActive = art.Connected,
+                connectionPanelFill = ColorTranslator.ToHtml(hero.Fill), connectionPanelGradient = ColorTranslator.ToHtml(hero.GradientEnd),
+                connectionButtonNeutral = primary.Neutral,
                 settings = settingsOpen, networkStarted = false, passed = issues.Count == 0, issues = issues, labels = labels });
         }
         internal void PaintNativePreview(Bitmap bitmap)
@@ -1267,14 +1353,21 @@ namespace DeltaResolveAccelerator
                 // A reference timing is optional; failure to save it never changes connection status.
                 try { SaveSuccessfulStartupWait(settingsPath, connectionWait.LastSuccessfulWaitSeconds.Value); } catch { }
             }
-            bool active = state.Phase == "connected" && state.Ready;
+            bool active = !initialStatusPending && state.Phase == "connected" && state.Ready;
             bool transitioning = busy || connectionWait.IsWaiting;
+            hero.Fill = active ? Palette.Mint : Palette.IdleSurface;
+            hero.GradientEnd = active ? Color.FromArgb(240, 246, 230) : Palette.IdleGradient;
+            foreach (Control control in hero.Controls)
+                if (control is Label) control.ForeColor = active ? Palette.Muted : Palette.IdleMuted;
+            stateTitle.ForeColor = active ? Palette.Text : Palette.IdleText;
+            primary.Neutral = !active;
+            hero.Invalidate(true);
             art.Connected = active; art.Invalidate();
             stateTitle.Text = initialStatusPending ? "正在检查连接" : active ? "已连接" : state.Phase == "starting" ? "正在连接" :
                 state.Phase == "stopping" ? "正在关闭" : state.Phase == "error" ? "连接需要处理" : "尚未开启";
             phasePill.Text = active ? "香港解析 · 已就绪" : state.Phase == "error" ? "需要处理" :
                 transitioning ? "处理中" : "待机";
-            phasePill.ForeColor = active ? Palette.Teal : state.Phase == "error" ? Palette.Error : Palette.Muted;
+            phasePill.ForeColor = active ? Palette.Teal : state.Phase == "error" ? Palette.Error : Palette.IdleMuted;
             stateMessage.Text = active ? "主入口解析经香港，对局流量保持直连。" :
                 state.Phase == "starting" ? "正在建立解析连接，请稍候。" :
                 state.Phase == "stopping" ? "正在恢复连接设置，请稍候。" :
@@ -1823,6 +1916,8 @@ namespace DeltaResolveAccelerator
             e.Cancel = true;
             if (closing) return;
             closing = true; timer.Stop(); updateTimer.Stop(); ApplyState();
+            launchAtStartup.Enabled = false;
+            await startupOperation;
             await operationGate.WaitAsync();
             busy = true;
             try
@@ -1843,7 +1938,7 @@ namespace DeltaResolveAccelerator
             {
                 busy = false; operationGate.Release();
                 if (allowClose) BeginInvoke(new Action(Close));
-                else { closing = false; timer.Start(); ApplyState(); }
+                else { closing = false; timer.Start(); ApplyState(); ShowStartupPreference(); }
             }
         }
         protected override void Dispose(bool disposing)

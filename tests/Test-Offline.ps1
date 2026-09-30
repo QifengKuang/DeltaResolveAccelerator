@@ -1,6 +1,6 @@
 #requires -Version 7.0
 [CmdletBinding()]
-param()
+param([switch]$SkipBuild)
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 $OutputEncoding=[Console]::OutputEncoding
 $ErrorActionPreference='Stop'
@@ -10,7 +10,10 @@ $output=Join-Path $PSScriptRoot 'output'
 $null=New-Item -ItemType Directory -Path $output -Force
 $pwsh=Join-Path $PSHOME 'pwsh.exe'
 
-& (Join-Path $repository 'build/Compile-App.ps1') -PreviewBuild | Out-Null
+if (-not $SkipBuild) { & (Join-Path $repository 'build/Compile-App.ps1') -PreviewBuild | Out-Null }
+if (-not (Test-Path -LiteralPath (Join-Path $repository 'build/AcceleratorPreview.exe') -PathType Leaf)) {
+    throw 'Preview executable missing. Run without -SkipBuild to compile it.'
+}
 
 $backendOutput=& $pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Test-BackendOffline.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Backend offline tests failed.' }

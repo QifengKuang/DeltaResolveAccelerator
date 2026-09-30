@@ -32,7 +32,7 @@ $support=@('build/Prepare-Dependencies.ps1','docs/BUILD.md','docs/DEPENDENCIES.m
 $required=@(@('app/Accelerator.exe','app/Accelerator.exe.config','app/DeltaLauncher.exe','app/DeltaResolve.ico')+$backendFiles+$support | Sort-Object)
 $sourceRequired=@(@(
     'build/Build-ApplicationBundle.ps1','build/Compile-App.ps1','build/Compile-Launcher.ps1','build/New-AppAssets.ps1',
-    'src/AcceleratorApp.cs','src/GameDiscovery.cs','src/Launcher.cs','src/UpdateManager.cs','src/UpdatePublicKey.cs',
+    'src/AcceleratorApp.cs','src/StartupManager.cs','src/GameDiscovery.cs','src/Launcher.cs','src/UpdateManager.cs','src/UpdatePublicKey.cs',
     'src/AssemblyInfo.cs','src/Accelerator.exe.config','src/app.manifest','src/launcher.manifest'
 )+$backendFiles+$support | Sort-Object)
 

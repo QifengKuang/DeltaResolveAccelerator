@@ -1,6 +1,10 @@
 # 三角洲 · 主入口优化
 
-Windows x64 轻量客户端，当前完整版本 **1.1.1**。使用腾讯云聚通 MNA 香港线路处理指定入口解析请求，对局流量保持本机直连。版本整理与验证记录见 [更新记录](CHANGELOG.md)。
+Windows x64 轻量客户端，当前客户端版本 **1.2.1**。使用腾讯云聚通 MNA 香港线路处理指定入口解析请求，对局流量保持本机直连。版本整理与验证记录见 [更新记录](CHANGELOG.md)。
+
+- 已安装用户：在 **设置 → 软件 → 检查更新** 下载 1.2.1，关闭加速器后重新从桌面快捷方式打开即可安装。开启自动检查后，也会在后台发现并下载新版本。
+- [下载 1.2.1 更新／修复安装器](https://raw.githubusercontent.com/QifengKuang/DeltaResolveAccelerator/updates/installers/DeltaResolveSetup-1.2.1.exe)（用于已有安装，保留配置与设备密钥）。
+- 1.2.1 新增可选开机自启动；连接卡片未连接时为浅灰，确认连接就绪后才变绿。
 
 - [下载 1.1.1 完整自有程序包](https://raw.githubusercontent.com/QifengKuang/DeltaResolveAccelerator/updates/packages/1.1.1/DeltaResolveApplication-1.1.1-win-x64.zip)
 - [下载文件 SHA-256 清单](https://raw.githubusercontent.com/QifengKuang/DeltaResolveAccelerator/updates/packages/1.1.1/SHA256SUMS.txt)
@@ -12,9 +16,11 @@ Windows x64 轻量客户端，当前完整版本 **1.1.1**。使用腾讯云聚�
 
 桌面与开始菜单始终指向安装目录中的 `DeltaLauncher.exe`。图标使用独立的 `DeltaResolve.ico`，不再依赖更新中被替换的主程序文件。设置 → 软件可以检查更新、关闭自动检查，以及修复快捷方式。
 
-旧版 1.1.0 轻量安装器保留用于原有界面和快捷方式修复，不能安装 1.1.1 后端修复：
+设置 → 软件的“开机自启动”默认关闭，切换后立即保存。开启后在当前用户登录 Windows 时打开程序，连接仍需手动开启。状态从 Windows 实际任务读取，兼容系统保存账户名和省略默认字段的格式；关闭开关只移除本安装的任务。
 
-- [下载 1.1.0 安装／修复程序](https://raw.githubusercontent.com/QifengKuang/DeltaResolveAccelerator/updates/installers/DeltaResolveSetup-1.1.0.exe)
+1.2.1 轻量安装器用于更新界面和快捷方式，不替换已安装的后端。完整后端基线仍由上方 1.1.1 完整包提供：
+
+- [下载 1.2.1 安装／修复程序](https://raw.githubusercontent.com/QifengKuang/DeltaResolveAccelerator/updates/installers/DeltaResolveSetup-1.2.1.exe)
 - 安装器只携带本项目自己的界面、启动器和图标；复用既有 PowerShell 与 SDK，不重复下载大型运行环境。
 - 首次从源码安装仍需要准备下文中的官方运行依赖和独立设备密钥。安装、目录选择、干净依赖导入见 [安装说明](docs/INSTALLATION.md)。
 
@@ -47,6 +53,7 @@ cd DeltaResolveAccelerator
 
 # 编译不提权的测试程序并执行全部离线回归。
 ./tests/Test-Offline.ps1
+./tests/Test-Startup.ps1
 ```
 
 正式客户端生成在 `app/Accelerator.exe`。没有准备运行依赖与独立设备密钥时，编译成功并不代表可以连接云服务。
@@ -63,7 +70,7 @@ Start-Process -FilePath ./build/AcceleratorPreview.exe -ArgumentList @('--previe
 
 ## 浅绿界面与显示缩放
 
-界面采用暖白背景、浅薄荷绿连接卡片和深绿操作按钮，顶部使用与页面连续的自绘窗口栏；顶部空白区域可拖动，右上角可最小化或关闭。关闭仍会等待现有安全停止流程完成。
+界面采用暖白背景。中央连接卡片在未开启、连接中、关闭中、异常及初次检查时为浅灰色；只有确认连接且后台就绪后，背景、图案与按钮才切换为绿色。顶部使用与页面连续的自绘窗口栏；顶部空白区域可拖动，右上角可最小化或关闭。关闭仍会等待现有安全停止流程完成。
 
 可拖动窗口四边或四角调整大小。内容区域范围为 720×556 至 1280×960 个逻辑像素（另加边缘拖拽区域），最大窗口同时受当前屏幕工作区限制。文字、按钮、图标按同一比例缩放，卡片适应剩余空间。拖拽从原始布局计算，不累积放大误差。字体只有在没有控件引用时才释放，避免反复缩放时的“参数无效”错误。
 
@@ -72,7 +79,7 @@ Start-Process -FilePath ./build/AcceleratorPreview.exe -ArgumentList @('--previe
 文字、控件尺寸与自绘图形统一按系统 DPI 缩放。预览程序使用与正式客户端相同的 DPI manifest，但无需管理员权限。可用 `--preview-scale 1.5` 模拟 150% 布局；预览同时生成 `.layout.json`，记录文字尺寸与控件边界检查。
 
 ```powershell
-# 100%、125%、150%、200% × 9 种状态，共 36 组离线布局检查。
+# 100%、125%、150%、200% × 11 种状态，共 44 组离线布局和连接配色检查。
 ./tests/Test-UiLayout.ps1
 
 # 100 组大小/状态/DPI 检查：每组反复缩放、字体有效性、边缘命中与尺寸限制。
@@ -150,7 +157,7 @@ app/
 下面的旧发布入口仅适用于界面更新，不会发布 1.1.1 的后端修复，不能代替完整包发布。修改版本号并提交源码后，在包含最新 `main` 的干净工作树执行：
 
 ```powershell
-./build/Publish-Release.ps1 -Version '1.1.1' -PrivateKeyPath 'C:\MyPrivateKeys\update-signing-key.dpapi'
+./build/Publish-Release.ps1 -Version '1.2.1' -PrivateKeyPath 'C:\MyPrivateKeys\update-signing-key.dpapi'
 ```
 
 命令编译并检查客户端，生成小型签名更新包，先推送源码，再原子更新 GitHub 上的签名发布目录。远端下载并在安全的下一次启动时应用更新；普通未发布的源码提交不会把未完成版本送到用户电脑。需要 Git 推送权限和对应公钥的本机签名密钥；密钥使用 Windows CurrentUser DPAPI 保存于仓库之外，不能提交。`-PrepareOnly` 可生成同样的本地发布树供已授权连接器推送。

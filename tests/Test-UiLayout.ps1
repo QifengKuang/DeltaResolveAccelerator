@@ -26,7 +26,7 @@ $runName = 'run-{0}-{1}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'), ([guid]::NewGu
 $runDirectory = Join-Path $outputDirectory $runName
 $null = New-Item -ItemType Directory -Path $runDirectory -Force
 $summaryPath = Join-Path $outputDirectory 'layout-summary.json'
-$states = @('stopped', 'starting', 'connected', 'error', 'settings', 'setup', 'software', 'checking', 'stopping')
+$states = @('stopped', 'starting', 'connected', 'connected-unready', 'checking-connected', 'error', 'settings', 'setup', 'software', 'checking', 'stopping')
 $scales = @(1.0, 1.25, 1.5, 2.0)
 $cases = [Collections.Generic.List[object]]::new()
 $suiteStartedAt = [DateTimeOffset]::UtcNow
@@ -83,9 +83,16 @@ foreach ($scale in $scales) {
             if ($layout.settings -ne $expectedSettings) {
                 $issues.Add('Preview did not show the requested dashboard or settings view.')
             }
-            $expectedPhase = if ($state -in @('settings', 'setup', 'software', 'checking')) { 'stopped' } else { $state }
+            $expectedPhase = if ($state -in @('settings', 'setup', 'software', 'checking')) { 'stopped' } elseif ($state -in @('connected-unready', 'checking-connected')) { 'connected' } else { $state }
             if ($layout.state -ne $expectedPhase) {
                 $issues.Add('Preview did not show the requested connection phase.')
+            }
+            $expectedActive = $state -eq 'connected'
+            $expectedFill = if ($expectedActive) { '#E5F1E0' } else { '#EBEBEB' }
+            $expectedGradient = if ($expectedActive) { '#F0F6E6' } else { '#F6F6F6' }
+            if ($layout.connectionPanelFill -ne $expectedFill -or $layout.connectionPanelGradient -ne $expectedGradient -or
+                $layout.connectionArtActive -ne $expectedActive -or $layout.connectionButtonNeutral -ne (-not $expectedActive)) {
+                $issues.Add('Connection panel must remain gray until a ready connection has been confirmed.')
             }
             $labelCount = @($layout.labels).Count
             if ($labelCount -eq 0) { $issues.Add('Layout report contained no visible text labels.') }

@@ -35,7 +35,7 @@ $backendNames=@(
 )
 $compileInputs=@(
     'build/Compile-App.ps1','build/Compile-Launcher.ps1','build/New-AppAssets.ps1',
-    'src/AcceleratorApp.cs','src/GameDiscovery.cs','src/Launcher.cs',
+    'src/AcceleratorApp.cs','src/StartupManager.cs','src/GameDiscovery.cs','src/Launcher.cs',
     'src/UpdateManager.cs','src/UpdatePublicKey.cs','src/AssemblyInfo.cs',
     'src/Accelerator.exe.config','src/app.manifest','src/launcher.manifest'
 )

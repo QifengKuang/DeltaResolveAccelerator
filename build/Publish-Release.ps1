@@ -30,7 +30,7 @@ if (-not $UseExistingBuild) {
     & (Join-Path $PSScriptRoot 'Compile-Setup.ps1') -OutputPath (Join-Path $repository ('dist/DeltaResolveSetup-'+$Version+'.exe')) | Out-Null
 }
 if (-not $SkipTests) {
-    foreach ($test in @('Test-Offline.ps1','Test-GameDiscovery.ps1','Test-Updates.ps1','Test-Installation.ps1','Test-UiLayout.ps1','Test-UiResize.ps1')) {
+    foreach ($test in @('Test-Offline.ps1','Test-GameDiscovery.ps1','Test-Updates.ps1','Test-Installation.ps1','Test-Startup.ps1','Test-UiLayout.ps1','Test-UiResize.ps1')) {
         & (Join-Path $PSHOME 'pwsh.exe') -NoProfile -NonInteractive -File (Join-Path $repository ('tests/'+$test)) | Out-Host
         if ($LASTEXITCODE -ne 0) { throw ('Release validation failed: '+$test) }
     }

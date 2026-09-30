@@ -14,6 +14,7 @@ $argsList = @('/nologo','/target:winexe','/platform:x64','/optimize+','/codepage
 $manifest = if ($PreviewBuild) { 'src/preview.manifest' } else { 'src/app.manifest' }
 $argsList += '/win32manifest:'+(Join-Path $root $manifest)
 $argsList += Join-Path $root 'src/AcceleratorApp.cs'
+$argsList += Join-Path $root 'src/StartupManager.cs'
 $argsList += Join-Path $root 'src/GameDiscovery.cs'
 $argsList += Join-Path $root 'src/UpdateManager.cs'
 $argsList += Join-Path $root 'src/UpdatePublicKey.cs'
