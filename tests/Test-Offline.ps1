@@ -21,6 +21,12 @@ $backend=$backendOutput | Out-String | ConvertFrom-Json
 if (-not $backend.Passed -or $backend.NetworkStarted) { throw 'Unexpected backend test result.' }
 [IO.File]::WriteAllText((Join-Path $output 'backend.json'),($backend | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
 
+$sdkStartupOutput=& $pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Test-SdkStartupErrors.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'SDK startup diagnostic tests failed.' }
+$sdkStartup=$sdkStartupOutput | Out-String | ConvertFrom-Json
+if (-not $sdkStartup.Passed -or $sdkStartup.NetworkStarted -or $sdkStartup.SdkStarted -or $sdkStartup.RealAppSettingsRead) { throw 'Unexpected SDK startup diagnostic test result.' }
+[IO.File]::WriteAllText((Join-Path $output 'sdk-startup-errors.json'),($sdkStartup | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+
 $rebootOutput=& $pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot 'Test-RebootRecovery.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'Reboot network recovery tests failed.' }
 [IO.File]::WriteAllText((Join-Path $output 'reboot-recovery.txt'),($rebootOutput | Out-String),[Text.UTF8Encoding]::new($false))
@@ -69,6 +75,7 @@ $uiChecks=@($ui.PSObject.Properties | Where-Object { $_.Name -notin @('passed','
 $summary=[pscustomobject]@{
     Passed=$true
     BackendChecks=$backend.Checks
+    SdkStartupErrorChecks=$sdkStartup.Checks
     RebootRecoveryPassed=$true
     RouterAdvertisementChecks=$route.CheckCount
     ReleasedResourceChecks=$release.CheckCount

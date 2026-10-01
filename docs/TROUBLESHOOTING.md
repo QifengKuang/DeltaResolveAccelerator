@@ -17,6 +17,16 @@
 
 上次成功耗时只是一条历史参考。超过该时长不能单独证明本次失败，也不表示还需等待固定秒数；没有历史记录时，不应凭空推定预计完成时间。若出现明确错误，按该错误定位问题，避免只依据动画或历史耗时反复重连。
 
+## Windows 拒绝启动 SDK
+
+SDK 启动失败时，后端会优先显示程序名、Windows 原生错误码和简短原因，避免长安装路径截断真正的错误。更新此提示需要配套后端；现有界面在线更新包不分发后端脚本。
+
+文件存在且哈希与官方原包一致，仍可能被 Windows 应用控制拦截。按故障时间检查事件查看器中的 `Microsoft-Windows-CodeIntegrity/Operational`：事件 3077 的目标文件、状态与策略名称可以确认具体拦截。`VerifiedAndReputableDesktop` 是智能应用控制的执行策略；不要只凭文件未签名或一般“拒绝访问”错误判断原因。
+
+智能应用控制目前不支持单个应用放行。优先向 SDK 提供方取得可信证书签名的兼容版本，并验证整套 SDK。关闭该功能会影响整台电脑的应用执行保护，需要设备使用者明确决定；加速器不会修改该设置。微软说明见[智能应用控制常见问题](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions)与[策略状态识别](https://learn.microsoft.com/en-us/windows/apps/develop/smart-app-control/test-your-app-with-smart-app-control)。
+
+项目的更新清单签名不等于 Windows 代码签名。个人证书申请与完整构建接入的准备情况见[代码签名说明](CODE-SIGNING.md)。
+
 ## 重启后提示仍在运行或需要恢复
 
 开着加速器正常重启或强制重启后，Windows、DHCP 及其他网络软件会重新建立网络状态。网卡编号、临时地址、接口优先级，甚至网卡集合都可能变化。跨重启仍要求整台电脑与旧快照一致，会把已经结束的连接一直显示为“网络配置仍有差异”。

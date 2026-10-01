@@ -19,6 +19,54 @@ function Protect-MnaTrialMessage {
     return $valueText
 }
 
+function New-MnaSdkProcessStartInfo {
+    param([Parameter(Mandatory)][string]$ExecutablePath,[Parameter(Mandatory)][string]$WorkingDirectory)
+    # Match the previous Start-Process launch exactly; SDK authentication stays in its local API.
+    $startInfo=[Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName=$ExecutablePath
+    $startInfo.WorkingDirectory=$WorkingDirectory
+    $startInfo.UseShellExecute=$true
+    $startInfo.WindowStyle=[Diagnostics.ProcessWindowStyle]::Hidden
+    return $startInfo
+}
+
+function Get-MnaSdkStartFailureMessage {
+    param([Parameter(Mandatory)][Exception]$Exception)
+    $cause=$Exception
+    while ($cause -and $cause -isnot [ComponentModel.Win32Exception]) { $cause=$cause.InnerException }
+    if ($cause) {
+        $nativeCode=$cause.NativeErrorCode
+        # Use the numeric native code, never a wrapper HRESULT or text parsed from a long path.
+        $reason=switch ($nativeCode) {
+            2 { '找不到程序文件，请修复安装。' }
+            3 { '找不到程序目录，请修复安装。' }
+            5 { 'Windows 拒绝访问，请检查文件权限或安全软件的拦截记录。' }
+            577 { 'Windows 无法验证程序的数字签名，请联系服务提供者获取受信任版本。' }
+            1260 { '系统组策略禁止运行此程序，请联系设备管理员。' }
+            # ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION: Windows winerror.h.
+            4551 { 'Windows 应用控制策略阻止此程序运行，请联系服务提供者获取受信任版本。' }
+            default { [ComponentModel.Win32Exception]::new($nativeCode).Message }
+        }
+        return Protect-MnaTrialMessage ('无法启动 linkboost.exe（Windows 错误码 '+$nativeCode+'）：'+$reason)
+    }
+    # Unknown exceptions may contain credentials or command text; expose only the type.
+    return Protect-MnaTrialMessage ('无法启动 linkboost.exe（'+$Exception.GetBaseException().GetType().Name+'），请检查 SDK 安装文件后重试。')
+}
+
+function Start-MnaSdkProcess {
+    param([Parameter(Mandatory)][string]$ExecutablePath,[Parameter(Mandatory)][string]$WorkingDirectory)
+    $startInfo=New-MnaSdkProcessStartInfo -ExecutablePath $ExecutablePath -WorkingDirectory $WorkingDirectory
+    try {
+        # Start-Process discards the Win32Exception; the .NET call preserves its native error code.
+        $process=[Diagnostics.Process]::Start($startInfo)
+        if ($null -eq $process) { throw [InvalidOperationException]::new('SDK process was not created.') }
+        return $process
+    } catch {
+        # Do not retain the raw exception/command/path in the status or connection report.
+        throw [InvalidOperationException]::new((Get-MnaSdkStartFailureMessage -Exception $_.Exception))
+    }
+}
+
 function Get-MnaSafeResponse {
     param([AllowNull()][object]$Response)
     $fields = [System.Collections.Generic.List[object]]::new()

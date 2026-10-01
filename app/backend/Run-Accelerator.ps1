@@ -66,7 +66,7 @@ try {
     $trialSensitiveStrings.Add($trialSocksPassword)
     if (Test-MnaUiStopRequested) { $uiStopRequested=$true;throw '用户已请求关闭' }
     Write-MnaUiStatus -Phase starting -Message '正在启动本地服务…' -RunId $RunId -RoutingMode $RoutingMode -ProgressStage '启动本地服务'
-    $trialProcess=Start-Process -FilePath $trialExecutable -WorkingDirectory $trialRuntimeDirectory -WindowStyle Hidden -PassThru
+    $trialProcess=Start-MnaSdkProcess -ExecutablePath $trialExecutable -WorkingDirectory $trialRuntimeDirectory
     $trialStartTime=$trialProcess.StartTime
     Update-MnaOwnedProcesses
     Save-MnaUiOwnership $RunId
