@@ -2,6 +2,9 @@
 
 Windows x64 轻量客户端，当前客户端版本 **1.2.1**。使用腾讯云聚通 MNA 香港线路处理指定入口解析请求，对局流量保持本机直连。版本整理与验证记录见 [更新记录](CHANGELOG.md)。
 
+- 新电脑：[下载 1.2.1 完整安装包](https://github.com/QifengKuang/DeltaResolveAccelerator/releases/download/v1.2.1-full/DeltaResolveFullSetup-1.2.1-win-x64.exe)（约 128 MiB，包含 PowerShell 与腾讯 SDK，首次安装专用）。
+- 给朋友：[可直接交给 AI 执行的安装 prompt](https://github.com/QifengKuang/DeltaResolveAccelerator/releases/download/v1.2.1-full/Friend-Install-Prompt.txt) · [完整发布说明与 SHA-256](https://github.com/QifengKuang/DeltaResolveAccelerator/releases/tag/v1.2.1-full)。可先保存本机 Steam／WeGame 路径，最后等待管理员分配独立 DataKey；无需 SSH 密钥。当前为手动授权内测，客户端试用截止为 2026-11-13 00:00 悉尼（UTC+11）。
+
 - 已安装用户：在 **设置 → 软件 → 检查更新** 下载 1.2.1，关闭加速器后重新从桌面快捷方式打开即可安装。开启自动检查后，也会在后台发现并下载新版本。
 - [下载 1.2.1 更新／修复安装器](https://raw.githubusercontent.com/QifengKuang/DeltaResolveAccelerator/updates/installers/DeltaResolveSetup-1.2.1.exe)（用于已有安装，保留配置与设备密钥）。
 - 1.2.1 新增可选开机自启动；连接卡片未连接时为浅灰，确认连接就绪后才变绿。
@@ -18,7 +21,7 @@ Windows x64 轻量客户端，当前客户端版本 **1.2.1**。使用腾讯云�
 
 设置 → 软件的“开机自启动”默认关闭，切换后立即保存。开启后在当前用户登录 Windows 时打开程序，连接仍需手动开启。状态从 Windows 实际任务读取，兼容系统保存账户名和省略默认字段的格式；关闭开关只移除本安装的任务。
 
-1.2.1 轻量安装器用于更新界面和快捷方式，不替换已安装的后端。完整后端基线仍由上方 1.1.1 完整包提供：
+已有安装使用 1.2.1 轻量安装器更新界面与快捷方式，不替换后端。新电脑使用上方完整安装包，已包含配套后端与运行依赖：
 
 - [下载 1.2.1 安装／修复程序](https://raw.githubusercontent.com/QifengKuang/DeltaResolveAccelerator/updates/installers/DeltaResolveSetup-1.2.1.exe)
 - 安装器只携带本项目自己的界面、启动器和图标；复用既有 PowerShell 与 SDK，不重复下载大型运行环境。
@@ -28,7 +31,7 @@ Windows x64 轻量客户端，当前客户端版本 **1.2.1**。使用腾讯云�
 
 更新使用固定公钥验证 RSA-SHA256 签名、清单和文件哈希。发布到 GitHub 的 `updates` 分支后，两台已安装 1.1.0 启动器的电脑使用相同更新通道，之后无需逐台手工复制文件。签名只能证明更新来源和完整性，不是 Windows Authenticode 签名。
 
-主分支包含自有界面、后端脚本和离线测试，构建产物单独放在 `updates` 分支的版本目录。官方 SDK、PowerShell 运行时、设备密钥、个人设置、网络状态和日志均不随仓库发布。
+主分支包含自有界面、后端脚本和离线测试。轻量更新产物放在 `updates` 分支；新电脑完整安装器放在 GitHub Releases，包含固定哈希核验的原始 PowerShell 与腾讯 SDK，并保留许可文件。设备密钥、个人设置、网络状态和日志均不发布。
 
 源码已加入开着加速器重启后的自动恢复：启动界面或重新连接时先确认旧会话所属的 Windows 开机，完整检查本应用残留后结束旧会话，下次开启重新保存基线。网卡、DHCP、IPv6 及其他网络软件的正常跨重启变化不再阻塞恢复，也不会按旧 PID 清理新进程；原始记录保持完整。详见[重启恢复说明](docs/TROUBLESHOOTING.md#重启后提示仍在运行或需要恢复)。这项修复同时依赖本提交的 UI 和后端，不包含在上方已有 1.1.0 轻量发布包中。
 
